@@ -31,6 +31,10 @@ def Capture_Click():
                     print(f"TAP: X={current_x}, Y={current_y}")
                     current_x = None
                     current_y = None
+    except KeyboardInterrupt:
+        print("hey")
+
+
 
 
 
