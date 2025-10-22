@@ -22,9 +22,9 @@ result = client.run_workflow(
 
 imgbase = result[0]['img output']
 
-img = base64.b64decode(imgbase)
-img = Image.open(BytesIO(img))
-img.show()
+# img = base64.b64decode(imgbase)
+# img = Image.open(BytesIO(img))
+# img.show()
 
 x = result[0].pop('img output')
 
