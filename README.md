@@ -15,4 +15,4 @@ A project showcasing an AI agent that uses computer vision and reinforcement lea
 ## Current Status
 
 Still under development as part of a second-year computer science project at the Higher School of Computer Science.
-Explanation:
+
