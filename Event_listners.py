@@ -41,10 +41,10 @@ def make_dpi_aware():
     except Exception:
         pass
 
-make_dpi_aware()
-
 def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540, 960)):
 
+    # Ensure DPI awareness is configured before any coordinate calculations
+    make_dpi_aware()
 
 
     # Find BlueStacks window handle by title
