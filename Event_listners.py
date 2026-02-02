@@ -80,7 +80,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 
     bs_x = round((rel_x * virtual_w / window_largeur), 2)
     bs_y = round( (rel_y - px_brd)* virtual_h / (window_hauteur - px_brd),2)
-    bs_y = max(0,bs_y)  # ignore title bar area
+    bs_y = max(0, bs_y)  # ignore title bar area
 
     return bs_x , bs_y
 
