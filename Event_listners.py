@@ -28,10 +28,10 @@ import ctypes
 def make_dpi_aware():
     try:
         # Windows 10+ recommended API
-        # Charge la DLL Windows user32.dll et donne-moi accès à ses fonctions
+        # Load the Windows DLL user32.dll and grant me access to its functions
         user32 = ctypes.windll.user32
         # Try SetProcessDpiAwarenessContext (Windows 10)
-        # hasattr(objet, "nom_attribut") vérifie si un objet possède un attribut ou une fonction.
+        # hasattr(object, "attribute_name") checks whether an object has an attribute or function.
         if hasattr(user32, "SetProcessDpiAwarenessContext"):
             # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
             user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -60,7 +60,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 
 
 
-    # Convertir l'origine client (0,0) en coordonnées écran
+    # Convert the client origin (0,0) to screen coordinates
     origin_x ,  origin_y = win32gui.ClientToScreen(hwnd, (0, 0))
 
     # Calculate relative position inside the window
