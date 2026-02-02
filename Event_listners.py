@@ -93,8 +93,11 @@ def on_click(x, y, button, pressed):
         :param pressed: Boolean indicating whether the button was pressed.
         """
         if pressed:
-            window = gw.getWindowsWithTitle("BlueStacks App Player 2")[0]
-            new_x, new_y = convert_to_bluestacks_coords(x, y,(window.height, window.width))
+            windows = gw.getWindowsWithTitle("BlueStacks App Player 2")
+            if not windows:
+                raise RuntimeError("BlueStacks window not found.")
+            window = windows[0]
+            new_x, new_y = convert_to_bluestacks_coords(x, y, (window.height, window.width))
             print(f"Mouse new click at ({new_x}, {new_y}) with {button}")
 
 def on_key(key):
