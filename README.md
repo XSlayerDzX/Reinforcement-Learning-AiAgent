@@ -1,4 +1,3 @@
-
 # AI Agent with Computer Vision and Reinforcement Learning
 
 A project showcasing an AI agent that uses computer vision and reinforcement learning to perform actions and learn dynamically. The system focuses on two main phases:

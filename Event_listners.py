@@ -4,7 +4,7 @@ import ClashRoyalData  # Importing a custom module for Clash Royale data handlin
 from CardPredictor import ExtractSlots  # Importing the ExtractSlots function from the CardPredictor module
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
-img_path = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
+#img_path = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
 def CurrentCard(keypressed):
         """
         Updates the current card based on the key pressed.
@@ -27,10 +27,10 @@ import ctypes
 def make_dpi_aware():
     try:
         # Windows 10+ recommended API
-        # Charge la DLL Windows user32.dll et donne-moi accès à ses fonctions
+        # Load the Windows DLL user32.dll and grant me access to its functions
         user32 = ctypes.windll.user32
         # Try SetProcessDpiAwarenessContext (Windows 10)
-        # hasattr(objet, "nom_attribut") vérifie si un objet possède un attribut ou une fonction.
+        # hasattr(object, "attribute_name") checks whether an object has an attribute or function.
         if hasattr(user32, "SetProcessDpiAwarenessContext"):
             # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
             user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -40,10 +40,10 @@ def make_dpi_aware():
     except Exception:
         pass
 
-make_dpi_aware()
-
 def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540, 960)):
 
+    # Ensure DPI awareness is configured before any coordinate calculations
+    make_dpi_aware()
 
 
     # Find BlueStacks window handle by title
@@ -59,7 +59,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 
 
 
-    # Convertir l'origine client (0,0) en coordonnées écran
+    # Convert the client origin (0,0) to screen coordinates
     origin_x ,  origin_y = win32gui.ClientToScreen(hwnd, (0, 0))
 
     # Calculate relative position inside the window
@@ -78,8 +78,8 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
     px_brd = 36.4 # pixels border to ignore the title bar and borders
 
     bs_x = round((rel_x * virtual_w / window_largeur), 2)
-    bs_y = round( (rel_y - px_brd)* virtual_h / (window_hauteur - px_brd),2)
-    bs_y = max(0,bs_y)  # ignore title bar area
+    bs_y = round((rel_y - px_brd) * virtual_h / (window_hauteur - px_brd), 2)
+    bs_y = max(0, bs_y)  # ignore title bar area
 
     return bs_x , bs_y
 
