@@ -53,8 +53,11 @@ def ExtractDistance(Troops_ally,Troops_enemy, ally_card, enemy_card):
         return 10000000
 
 
-def Output_Dataset_Schema():
-    pass
+# def Output_Dataset_Schema():
+#     action = "wait"
+#     pos_x = None
+#     pos_y = None
+#     pass
 
 
 def Create_Dataset_Row(imgpath):
