@@ -13,21 +13,25 @@ IMG_PATH  = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
-result = client.run_workflow(
-    workspace_name=WORKSPACE,
-    workflow_id=WORKFLOW,
-    images={"image": IMG_PATH}
-)
+def predict(image_path):
+    result = client.run_workflow(
+        workspace_name=WORKSPACE,
+        workflow_id=WORKFLOW,
+        images={"image": image_path}
+    )
+    return result
+
+def Show_img(result):
+    imgbase = result[0]['img output']
+    img = base64.b64decode(imgbase)
+    img = Image.open(BytesIO(img))
+    img.show()
 
 
-imgbase = result[0]['img output']
-
-img = base64.b64decode(imgbase)
-img = Image.open(BytesIO(img))
-img.show()
-
-x = result[0].pop('img output')
-def ExtractData(result):
+def ExtractData(imgpath):
+    result = predict(imgpath)
+    Show_img(result)
+    result[0].pop('img output')
     Slots = {} # slot_1 = "archers",slot_2 = "archers"
     Troops_ally = {} # "knight" : (x,y), ally
     Troops_enemy = {} # "knight" : (x,y), enemy
@@ -58,7 +62,7 @@ def ExtractData(result):
                         elixir = ElixirDecode[object["class"]]
     return Slots, Troops_ally, Troops_enemy, Towers, elixir
 
-Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(result)
+Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
 if __name__ == "__main__":
  print("Slots:", Slots)
  print("Troops:", Troops_ally)
