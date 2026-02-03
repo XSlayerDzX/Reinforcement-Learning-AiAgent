@@ -23,6 +23,9 @@ def video_to_frames(video_path, output_folder, step):
     cap.release()
     print(f"✅ Done! Saved {saved_count} frames to {output_folder}")
 
+#function stream line d to extract frames every 2 frames
 
+def extract_frames_every_n(video_path, output_folder, n):
+    video_to_frames(video_path, output_folder, step=n)
 
 video_to_frames(r"F:\Clash Royal\2025-09-07 21-06-43.mp4", r"F:\Clash Royal Troop Detection Data Set\Training Frames v2", step=15)

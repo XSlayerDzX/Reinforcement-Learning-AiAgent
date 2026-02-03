@@ -1,11 +1,10 @@
 from pynput import keyboard, mouse  # Importing keyboard and mouse listeners from the pynput library
-from threading import Thread  # Importing Thread for multithreading
 import StatePredictor  # Importing a custom module for state prediction
 import ClashRoyalData  # Importing a custom module for Clash Royale data handling
 from CardPredictor import ExtractSlots  # Importing the ExtractSlots function from the CardPredictor module
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
-
+#img_path = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
 def CurrentCard(keypressed):
         """
         Updates the current card based on the key pressed.
@@ -13,11 +12,11 @@ def CurrentCard(keypressed):
         :param keypressed: The key pressed by the user, used to identify the card slot.
         """
         current = None
-        Slots = ExtractSlots()  # Extract available card slots
+        Slots = ExtractSlots(img_path)  # Extract available card slots
         current = Slots.get(f"slot_{keypressed}")  # Get the card in the corresponding slot
         if current:
-            print(f"Current card selected: {current}")
-            ClashRoyalData.CurrentCard = current  # Update the current card in ClashRoyalData
+           ClashRoyalData.CurrentCard = current  # Update the current card in ClashRoyalData
+           print(f"Current card set to: {ClashRoyalData.CurrentCard}")
         else:
             print(f"No card found in slot {keypressed}")
 
@@ -76,7 +75,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 
     virtual_w, virtual_h = bluestacks_resolution
 
-    px_brd = 36.9 # pixels border to ignore the title bar and borders
+    px_brd = 36.4 # pixels border to ignore the title bar and borders
 
     bs_x = round((rel_x * virtual_w / window_largeur), 2)
     bs_y = round((rel_y - px_brd) * virtual_h / (window_hauteur - px_brd), 2)
@@ -97,10 +96,11 @@ def on_click(x, y, button, pressed):
             if not windows:
                 raise RuntimeError("BlueStacks window not found.")
             window = windows[0]
-            new_x, new_y = convert_to_bluestacks_coords(x, y, (window.height, window.width))
-            print(f"Mouse new click at ({new_x}, {new_y}) with {button}")
+            new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
+            print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
 
-def on_key(key):
+
+def on_press(key):
         """
         Handles keyboard key press events and updates the current card if a specific key is pressed.
 
@@ -116,38 +116,25 @@ def on_key(key):
 
     # Create mouse and keyboard listeners
 mouse_listener = mouse.Listener(on_click=on_click)
-keyboard_listener = keyboard.Listener(on_press=on_key)
+keyboard_listener = keyboard.Listener(on_press=on_press)
 
-def start_mouse():
-        """
-        Starts the mouse listener in the current thread.
-        """
-        mouse_listener.start()
-        mouse_listener.join()
+print("Démarrage des écouteurs de souris et de clavier...")
+mouse_listener.start()
+keyboard_listener.start()
 
-def start_keyboard():
-        """
-        Starts the keyboard listener in the current thread.
-        """
-        keyboard_listener.start()
-        keyboard_listener.join()
+print("Écoute en cours... Appuyez sur Echap pour quitter le clavier.")
 
-    # Run listeners in separate threads
-mouse_thread = Thread(target=start_mouse)
-keyboard_thread = Thread(target=start_keyboard)
-
-mouse_thread.start()
-keyboard_thread.start()
-
+# --- 3. Maintien du programme en vie ---
 try:
-        # Wait for both threads to complete
-        mouse_thread.join()
-        keyboard_thread.join()
+    # On demande au programme principal d'attendre que les listeners finissent.
+    # Si on_press retourne False (touche Echap), k_listener s'arrête.
+    keyboard_listener.join()
+    mouse_listener.join()
 except KeyboardInterrupt:
-        # Stop listeners on keyboard interrupt
-        mouse_listener.stop()
-        keyboard_listener.stop()
-        print("Listeners stopped.")
+    # Pour gérer le Ctrl+C dans le terminal proprement
+    print("\nStop the listner.")
+    keyboard_listener.stop()
+    mouse_listener.stop()
 
 
 
