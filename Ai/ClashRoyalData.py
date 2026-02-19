@@ -1,3 +1,5 @@
+
+
 ElixirCost = {
 "archers" : 3,
 "giant" : 5,
@@ -11,6 +13,7 @@ ElixirCost = {
 "musketeer" : 4,
 "spear goblins" : 2,
 }
+
 
 
 ElixirDecode = {

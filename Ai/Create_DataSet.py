@@ -1,31 +1,28 @@
 #importthe screenshot module
 #-->
-img_path = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
+#img_path = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 from StatePredictor import ExtractData
+import State_Tracker
 
 def ExtractSlots(Slots):
     slot1 = Slots.get("slot_1")  # None if missing
     slot2 = Slots.get("slot_2")
     slot3 = Slots.get("slot_3")
     slot4 = Slots.get("slot_4")
-    print("ExtractSlots function worked fine")
     return slot1, slot2, slot3, slot4
 
 
 def ExtractTower(Towers, side, tower_type):
     if tower_type in Towers:
-        print("ExtractTower function worked fine")
         return 1
     else:
-        print("ExtractTower function worked fine")
         return 0
 
 def ExtractElixir(Elixir):
     if not Elixir:
-        print("ExtractElixir function worked fine")
-        return None
+        return 0
     else:
-        print("ExtractElixir function worked fine")
+        State_Tracker.CurrentElixir = Elixir
         return Elixir
 
 def ExtractCard(Troops, card_name):
@@ -33,10 +30,8 @@ def ExtractCard(Troops, card_name):
         print(Troops[card_name])
         position= Troops[card_name][0]
         x, y = position
-        print("ExtractCard function worked fine")
         return 1, (round(int(x),2)), round(int(y),2)
     else:
-        print("ExtractCard function worked fine")
         return 0, None, None
 
 def ExtractDistance(Troops_ally,Troops_enemy, ally_card, enemy_card):
@@ -46,26 +41,41 @@ def ExtractDistance(Troops_ally,Troops_enemy, ally_card, enemy_card):
         x1, y1 = position_ally
         x2, y2 = position_enemy
         distance = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
-        print("ExtractDistance function worked fine")
         return round(int(distance),2)
     else:
-        print("ExtractDistance function worked fine")
         return 10000000
 
 
-# def Output_Dataset_Schema():
-#     action = "wait"
-#     pos_x = None
-#     pos_y = None
-#     pass
+def Output_Dataset_Schema(action, pos_x, pos_y,id):
+    """This function defines the schema for the dataset row. It takes the action and the position (x, y) as input
+    and returns a dictionary representing the dataset output."""
+    schema = {
+        "id": id,
+        "action": action,
+        "pos_x": pos_x,
+        "pos_y": pos_y,
+    }
+    return schema
 
 
-def Create_Dataset_Row(imgpath):
+
+
+def Create_Dataset_Row(imgpath,id):
     if not imgpath:
         print("No image path provided.")
         return None
 
-    slots, troops_ally, troops_enemy, towers, elixir = ExtractData(imgpath)
+    try:
+        data = ExtractData(imgpath)
+        if data is None:
+            print("Data extraction failed.")
+            return None
+
+        slots, troops_ally, troops_enemy, towers, elixir = ExtractData(imgpath)
+        print(slots)
+    except Exception as e:
+        print(f"Error extracting data from image: {e}")
+        return None
 
     # --- Slots ---
     slot_1, slot_2, slot_3, slot_4 = ExtractSlots(slots)
@@ -124,6 +134,7 @@ def Create_Dataset_Row(imgpath):
 
     # --- Assemble full feature dict ---
     feature_dict = {
+        #"id": id,
         "slot_1": slot_1,
         "slot_2": slot_2,
         "slot_3": slot_3,
@@ -145,5 +156,5 @@ def Create_Dataset_Row(imgpath):
 
     return feature_dict
 
-dict= Create_Dataset_Row(imgpath=img_path)
-print(dict)
+#dict= Create_Dataset_Row(imgpath=img_path)
+#print(dict)

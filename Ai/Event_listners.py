@@ -1,30 +1,13 @@
 # python
 from pynput import keyboard, mouse  # Importing keyboard and mouse listeners from the pynput library
 import ClashRoyalData  # Importing a custom module for Clash Royale data handling
-from CardPredictor import ExtractSlots  # Importing the ExtractSlots function from the CardPredictor module
+from CardPredictor import ExtractSlot  # Importing the ExtractSlots function from the CardPredictor module
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
+from Create_DataSet import *
+import State_Tracker
 img_path = r'C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png'
 import ctypes
-
-def CurrentCard(keypressed):
-    """
-    Updates the current card based on the key pressed.
-
-    :param keypressed: The key pressed by the user, used to identify the card slot.
-    """
-    current = None
-    Slots = ExtractSlots(img_path)  # Extract available card slots
-    current = Slots.get(f"slot_{keypressed}")  # Get the card in the corresponding slot
-    if current:
-       ClashRoyalData.CurrentCard = current  # Update the current card in ClashRoyalData
-       print(f"Current card set to: {ClashRoyalData.CurrentCard}")
-    else:
-        print(f"No card found in slot {keypressed}")
-
-
-# remove scaling issues on high-DPI displays
-# transform logical coordinates to physical coordinates
 
 def make_dpi_aware():
     try:
@@ -83,7 +66,23 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 
     return bs_x, bs_y
 
-def on_click(x, y, button, pressed):
+def Click_Validation(x,y):
+    CurrentCard = State_Tracker.CurrentCard
+    if State_Tracker.CurrentCard:
+        card_elix = ClashRoyalData.ElixirCost[CurrentCard]
+        current_elix = State_Tracker.CurrentElixir
+        if current_elix >= card_elix:
+            print(f"Click at BlueStacks coordinates: ({x}, {y}) is valid for card: {State_Tracker.CurrentCard}")
+            State_Tracker.CurrentElixir = abs(current_elix - card_elix)
+            return True
+        else:
+            print(f"Not enough elixir for card: {State_Tracker.CurrentCard}. Current elixir: {current_elix}, required: {card_elix}. Click ignored.")
+            return False
+    else:
+        print("No current card selected. Click ignored.")
+
+
+def on_click(x,y,pressed):
     """
     Handles mouse click events and converts the coordinates to BlueStacks coordinates.
     :param x: Global X coordinate of the mouse click.
@@ -97,7 +96,38 @@ def on_click(x, y, button, pressed):
             raise RuntimeError("BlueStacks window not found.")
         window = windows[0]
         new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
-        print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
+        #print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
+        Validated = Click_Validation(new_x, new_y)
+        if Validated:
+            print("click validated, interrupting dataset creation and updating state tracker...")
+            State_Tracker.interrupt = True
+            State_Tracker.pos_x = new_x
+            State_Tracker.pos_y = new_y
+        else:
+            print("Click was not valid, no action taken.")
+
+def CurrentCard(keypressed,img):
+    """
+    Updates the current card based on the key pressed.
+
+    :param keypressed: The key pressed by the user, used to identify the card slot.
+    """
+    if img is None:
+        print("No image available to extract card information.")
+        return
+    key = str(keypressed)
+    try:
+        slots = ExtractSlot(img)
+        current = slots.get(f"slot_{keypressed}")  #3 Get the card in the corresponding slot
+        if current:
+            print(f"this is the selected card: {current}")
+            State_Tracker.CurrentCard = current  # Update the current card in ClashRoyalData2
+        else:
+            print(f"No card found in slot {key}")
+    except Exception as e:
+        print(f"Error in CurrentCard: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def on_press(key):
@@ -107,31 +137,33 @@ def on_press(key):
     :param key: The key that was pressed.
     """
     try:
-        print(f"Key {key.char} pressed")
-        # Check if the key is one of the predefined keys and update the current card
-        if key == keyboard.Key.f1 or keyboard.Key.f2 or keyboard.Key.f3 or keyboard.Key.f4:
-            CurrentCard(key.char)
+        # Check if the key has a 'char' attribute (alphanumeric keys)
+        if hasattr(key, 'char') and key.char:
+            print(f"Key {key.char} pressed")
+            # Check if the key is one of the predefined keys and update the current card
+            if key.char in ['1', '2', '3', '4']:
+                CurrentCard(key.char, State_Tracker.Current_img)
     except AttributeError:
+        # This is for special keys like Escape, Shift, etc.
         print(f"Special key {key} pressed")
+    except Exception as e:
+        print(f"Error in on_press: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
-# Create mouse and keyboard listeners
-mouse_listener = mouse.Listener(on_click=on_click)
-keyboard_listener = keyboard.Listener(on_press=on_press)
 
-print("Starting mouse and keyboard listeners...")
-mouse_listener.start()
-keyboard_listener.start()
+def Start_Listeners():
+    """
+    Starts the mouse and keyboard listeners to capture events.
+    """
+    # Create mouse and keyboard listeners
+    mouse_listener = mouse.Listener(on_click=on_click)
+    keyboard_listener = keyboard.Listener(on_press=on_press)
 
-print("Listening... Press Escape to exit the keyboard.")
+    print("Starting mouse and keyboard listeners...")
+    mouse_listener.start()
+    keyboard_listener.start()
 
-# --- 3. Keep the program alive ---
-try:
-    # Ask the main program to wait for listeners to finish.
-    # If on_press returns False (Escape key), keyboard_listener stops.
-    keyboard_listener.join()
-    mouse_listener.join()
-except KeyboardInterrupt:
-    # To handle Ctrl+C in the terminal properly
-    print("\nStop the listner.")
-    keyboard_listener.stop()
-    mouse_listener.stop()
+    print("Listening... Press Escape to exit the keyboard.")
+
+    return mouse_listener, keyboard_listener

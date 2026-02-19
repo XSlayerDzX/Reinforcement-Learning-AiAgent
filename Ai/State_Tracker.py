@@ -1,0 +1,10 @@
+Current_img = None
+CurrentCard = None
+pos_x = None
+pos_y = None
+CurrentElixir = 0
+CurrentTowers = {}
+CurrentTroops_ally = {}
+CurrentTroops_enemy = {}
+CurrentSlots = {}
+interrupt = False

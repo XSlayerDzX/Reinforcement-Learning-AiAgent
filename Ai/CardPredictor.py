@@ -9,7 +9,7 @@ API_KEY = "obQog4mAaBRuPZZBIoti"
 
 WORKSPACE = "clashroyalbot-z9idj"
 WORKFLOW  = "detect-and-classify"
-IMG_PATH  = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
+IMG_PATH  = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
@@ -23,8 +23,8 @@ def predict(image_path):
 
 
 
-def ExtractSlots(IMG_PATH):
-    result = predict(IMG_PATH)
+def ExtractSlot(imgpath):
+    result = predict(imgpath)
     Slots = {} # slot_1 = "archers",slot_2 = "archers"
     for key, value in result[0].items():
         if "slot_" in key:
@@ -34,6 +34,6 @@ def ExtractSlots(IMG_PATH):
                 Slots.update({f"slot_{n}": card})
     return Slots
 
-if __name__ == "__main__":
-    Slots = ExtractSlots(IMG_PATH)
-    print("Slots:", Slots)
+# if __name__ == "__main__":
+#     Slots = ExtractSlot(IMG_PATH)
+#     print("Slots:", Slots)
