@@ -99,8 +99,8 @@ def on_click(x,y,pressed):
         #print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
         Validated = Click_Validation(new_x, new_y)
         if Validated:
-            print("click validated, interrupting dataset creation and updating state tracker...")
             State_Tracker.interrupt = True
+            print("click validated, interrupting dataset creation and updating state tracker...")
             State_Tracker.pos_x = new_x
             State_Tracker.pos_y = new_y
         else:

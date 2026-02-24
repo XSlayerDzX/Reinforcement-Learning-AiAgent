@@ -1,6 +1,7 @@
 from os import waitpid
 from time import sleep
 import pandas as pd
+import queue as q
 
 from Ai.State_Tracker import interrupt
 from Event_listners import *
@@ -16,6 +17,7 @@ match_dict_output = {
 
 play = True
 id = 0
+match_id = 1
 mouse_listener , keyboard_listener = Start_Listeners()
 
 while play and id < 3:
@@ -24,10 +26,11 @@ while play and id < 3:
 
     if current_frame:
         State_Tracker.Current_img = current_frame
-        row_dict = Create_Dataset_Row(current_frame, id)
+        row_dict = Create_Dataset_Row(current_frame, id, match_id)
         if row_dict:
             if State_Tracker.interrupt:
                 State_Tracker.interrupt = False
+                print("Interrupt received, creating dataset row with current card and position.")
                 output = Output_Dataset_Schema(State_Tracker.CurrentCard, State_Tracker.pos_x, State_Tracker.pos_y, id)
                 State_Tracker.CurrentCard = None
             else:
@@ -39,11 +42,10 @@ while play and id < 3:
         else:
             print(f"Failed to create dataset row for frame {id}. Skipping.")
             os.remove(current_frame)
-        pass
     else:
         print("No frame captured. Skipping dataset row creation.")
     id +=1
-    sleep(2)
+    sleep(10)
 
 mouse_listener.stop()
 keyboard_listener.stop()

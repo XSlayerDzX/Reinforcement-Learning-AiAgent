@@ -5,6 +5,7 @@ from io import BytesIO
 from ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
 import State_Tracker
 
+
 API_URL = "http://localhost:9001"
 API_KEY = "obQog4mAaBRuPZZBIoti"
 
