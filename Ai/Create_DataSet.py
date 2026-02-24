@@ -60,7 +60,7 @@ def Output_Dataset_Schema(action, pos_x, pos_y,id):
 
 
 
-def Create_Dataset_Row(imgpath,id):
+def Create_Dataset_Row(imgpath,id,match_id):
     if not imgpath:
         print("No image path provided.")
         return None
@@ -134,7 +134,8 @@ def Create_Dataset_Row(imgpath,id):
 
     # --- Assemble full feature dict ---
     feature_dict = {
-        #"id": id,
+        "match_id": match_id,
+        "id": id,
         "slot_1": slot_1,
         "slot_2": slot_2,
         "slot_3": slot_3,
