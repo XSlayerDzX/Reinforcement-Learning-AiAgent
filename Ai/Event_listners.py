@@ -5,7 +5,7 @@ from CardPredictor import ExtractSlot  # Importing the ExtractSlots function fro
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
 from Create_DataSet import *
-import State_Tracker
+from State_Tracker import *
 img_path = r'C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png'
 import ctypes
 
@@ -31,7 +31,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
     make_dpi_aware()
 
     # Find BlueStacks window handle by title
-    hwnd = win32gui.FindWindow(None, "BlueStacks App Player")
+    hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
     if not hwnd:
         raise RuntimeError("BlueStacks window not found")
     else:
@@ -91,18 +91,22 @@ def on_click(x,y,pressed):
     :param pressed: Boolean indicating whether the button was pressed.
     """
     if pressed:
-        windows = gw.getWindowsWithTitle("BlueStacks App Player")
+        windows = gw.getWindowsWithTitle("BlueStacks App Player 1")
         if not windows:
             raise RuntimeError("BlueStacks window not found.")
         window = windows[0]
         new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
         #print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
-        Validated = Click_Validation(new_x, new_y)
+        Validated = True#Click_Validation(new_x, new_y)
         if Validated:
+            id = State_Tracker.Current_Id
             State_Tracker.interrupt = True
             print("click validated, interrupting dataset creation and updating state tracker...")
+            output = Output_Dataset_Schema(State_Tracker.CurrentCard, new_x, new_y, id)
+            match_dict_output["data"].append(output)
             State_Tracker.pos_x = new_x
             State_Tracker.pos_y = new_y
+            print(f"x: {State_Tracker.pos_x}, y: {State_Tracker.pos_y}")
         else:
             print("Click was not valid, no action taken.")
 

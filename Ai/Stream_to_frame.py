@@ -14,7 +14,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
 
     with mss.mss() as sct:
         # Find BlueStacks window handle by title
-        hwnd = win32gui.FindWindow(None, "BlueStacks App Player")
+        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
 
         if not hwnd:
             # Fallback: partial search if the name changes
@@ -37,7 +37,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         # Get dynamic coordinates
         rect = win32gui.GetWindowRect(hwnd)
         x = rect[0]
-        y = rect[1] + 54  # Title bar offset
+        y = rect[1] + 40  # Title bar offset
         w = rect[2] - x - 40
         h = rect[3] - y
 
