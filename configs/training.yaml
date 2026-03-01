@@ -1,0 +1,106 @@
+# Training Configuration
+# This file defines all training-related settings and hyperparameters
+
+# Training phases
+phases:
+  imitation:
+    enabled: true
+    description: "Supervised learning with imitation learning"
+    epochs: 50
+    learning_rate: 0.001
+  reinforcement:
+    enabled: true
+    description: "Reinforcement learning from interactions"
+    episodes: 1000
+    learning_rate: 0.0001
+
+# Model architecture
+model:
+  vision_backbone: "resnet50"  # Options: resnet50, mobilenet, efficientnet
+  state_predictor:
+    input_size: 1024
+    hidden_size: 512
+    output_size: 128
+  card_predictor:
+    confidence_threshold: 0.5
+    nms_threshold: 0.45
+    top_k: 8
+
+# Optimizer settings
+optimizer:
+  type: "adam"  # Options: adam, sgd, adamw
+  beta1: 0.9
+  beta2: 0.999
+  epsilon: 1e-08
+  weight_decay: 1e-04
+
+# Learning rate scheduler
+scheduler:
+  type: "cosine"  # Options: cosine, linear, step, exponential
+  warmup_epochs: 5
+  warmup_lr_init: 1e-05
+  min_lr: 1e-06
+
+# Loss functions
+loss:
+  imitation:
+    type: "cross_entropy"
+    weight: 1.0
+  rl:
+    type: "mse"
+    weight: 1.0
+  regularization:
+    type: "l2"
+    weight: 1e-04
+
+# Training hyperparameters
+training:
+  epochs: 50
+  batch_size: 32
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 1
+  early_stopping_patience: 10
+  early_stopping_metric: "val_loss"
+  early_stopping_mode: "min"  # min or max
+
+# Device settings
+device:
+  type: "cuda"  # Options: cuda, cpu, mps
+  id: 0  # GPU device id
+  mixed_precision: true
+
+# Checkpoint and saving
+checkpoint:
+  save_frequency: 5  # Save every n epochs
+  keep_best: true
+  keep_last: true
+  keep_every: 10
+  save_dir: "./models/checkpoints"
+
+# Validation
+validation:
+  frequency: 1  # Validate every n epochs
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1_score"
+    - "loss"
+
+# Logging and monitoring
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  frequency: 100  # Log every n steps
+  tensorboard: true
+  wandb:
+    enabled: false
+    project: "clash-royale-rl"
+    entity: ""  # Your wandb username
+
+# Debugging
+debug:
+  enabled: false
+  save_predictions: false
+  save_gradients: false
+  profile: false
+
