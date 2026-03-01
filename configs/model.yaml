@@ -1,0 +1,125 @@
+# Model Configuration
+# This file defines all model architectures and their parameters
+
+# Vision models for state and card prediction
+vision_models:
+  # Backbone for feature extraction
+  backbone:
+    name: "resnet50"
+    pretrained: true
+    freeze_backbone: false
+    freeze_layers: 0  # Number of layers to freeze from the beginning
+    input_channels: 3
+
+  # Card detection model (YOLO-like)
+  card_detector:
+    name: "card_detector"
+    type: "object_detection"  # object_detection or classification
+    model_path: "./models/pretrained/card_detector.onnx"
+    input_size: [416, 416]
+    num_classes: 8  # Number of unique cards
+    confidence_threshold: 0.5
+    nms_threshold: 0.45
+    anchors:
+      - [10, 13]
+      - [16, 30]
+      - [33, 23]
+
+  # State predictor network
+  state_predictor:
+    name: "state_predictor"
+    type: "cnn"
+    architecture:
+      - layer: "conv2d"
+        filters: 64
+        kernel_size: 3
+        activation: "relu"
+      - layer: "maxpool2d"
+        pool_size: 2
+      - layer: "conv2d"
+        filters: 128
+        kernel_size: 3
+        activation: "relu"
+      - layer: "maxpool2d"
+        pool_size: 2
+      - layer: "conv2d"
+        filters: 256
+        kernel_size: 3
+        activation: "relu"
+      - layer: "flatten"
+      - layer: "dense"
+        units: 512
+        activation: "relu"
+      - layer: "dropout"
+        rate: 0.5
+      - layer: "dense"
+        units: 256
+        activation: "relu"
+    output_size: 128
+
+  # Action prediction network
+  action_predictor:
+    name: "action_predictor"
+    type: "mlp"  # Multi-layer perceptron
+    input_features: 256
+    hidden_layers: [256, 128]
+    activation: "relu"
+    output_actions: 100  # Grid size or action space
+    dropout: 0.3
+
+# Reinforcement learning models
+rl_models:
+  policy_network:
+    name: "policy_network"
+    type: "actor_critic"
+    input_size: 1024
+    hidden_layers: [512, 256]
+    activation: "relu"
+    output_size: 100  # Action space
+
+  value_network:
+    name: "value_network"
+    type: "critic"
+    input_size: 1024
+    hidden_layers: [512, 256]
+    activation: "relu"
+    output_size: 1
+
+# Model initialization
+initialization:
+  method: "kaiming"  # kaiming, xavier, normal, uniform
+  weights:
+    gain: 1.0
+  biases: 0.0
+
+# Model quantization and optimization
+quantization:
+  enabled: false
+  method: "int8"  # int8, fp16, dynamic
+  calibration_data_size: 1000
+
+# Model export
+export:
+  formats: ["onnx", "torchscript", "tensorflow"]
+  optimize_for_inference: true
+  include_preprocessing: false
+
+# Model evaluation metrics
+evaluation:
+  metrics:
+    detection:
+      - "mAP"
+      - "precision"
+      - "recall"
+      - "f1_score"
+    classification:
+      - "accuracy"
+      - "precision"
+      - "recall"
+      - "f1_score"
+      - "confusion_matrix"
+    rl:
+      - "episode_reward"
+      - "win_rate"
+      - "average_action_confidence"
+

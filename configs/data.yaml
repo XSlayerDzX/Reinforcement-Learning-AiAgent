@@ -1,0 +1,70 @@
+# Data Configuration
+
+  cache_format: "numpy"  # numpy, pickle, or hdf5
+  max_cache_size: 1000  # MB
+  enabled: true
+cache:
+# Cache settings
+
+  drop_last: false
+  pin_memory: true
+  shuffle: true
+  num_workers: 4
+  batch_size: 32
+dataloader:
+# Data loading
+
+  scale_method: "cv2.INTER_LINEAR"
+  normalize_std: [0.229, 0.224, 0.225]
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize: true
+preprocessing:
+# Preprocessing
+
+  card_size_max: 200
+  card_size_min: 50
+  num_cards: 8  # Maximum cards in hand
+cards:
+# Card detection data
+
+  zoom_range: [0.9, 1.1]
+  zoom: true
+  contrast_range: [0.8, 1.2]
+  contrast: true
+  brightness_range: [0.8, 1.2]
+  brightness: true
+  rotation_range: 10
+  rotation: true
+  vertical_flip: false
+  horizontal_flip: false
+  enabled: true
+augmentation:
+# Data augmentation
+
+  frame_skip: 0
+  max_frames_per_sequence: 100
+  sampling_rate: 1  # Process every nth frame (1 = all frames)
+frame:
+# Frame sampling
+
+  format: "BGR"  # OpenCV default format
+  channels: 3
+  height: 1920
+  width: 1080
+image:
+# Image processing settings
+
+  random_seed: 42
+  test: 0.15
+  validation: 0.15
+  train: 0.7
+split:
+# Data splitting
+
+  description: "Dataset for Clash Royale game state prediction and card detection"
+  version: "1.0"
+  name: "Clash Royale Game Data"
+dataset:
+# Dataset configuration
+
+# This file defines all data-related settings and preprocessing parameters
