@@ -1,0 +1,48 @@
+# File and Directory Paths Configuration
+# This file defines all the paths used throughout the project
+
+# Project root paths
+project_root: "./"
+
+# Data paths
+data:
+  root: "./data"
+  raw: "./data/raw"
+  processed: "./data/processed"
+  images: "./data/images"
+  temp_screens: "./data/raw/temp_screens"
+
+# Model paths
+models:
+  root: "./models"
+  checkpoints: "./models/checkpoints"
+  pretrained: "./models/pretrained"
+  onnx: "./models/onnx"
+
+# Source code paths
+src:
+  root: "./src"
+  control: "./src/control"
+  cr_agent: "./src/cr_agent"
+  vision: "./src/vision"
+  training: "./src/training"
+  data_pipeline: "./src/cr_agent/data_pipepline"
+
+# Experiment and log paths
+experiments:
+  root: "./experiments"
+  logs: "./experiments/logs"
+  results: "./experiments/results"
+  notebooks: "./experiments"
+
+# Output paths
+output:
+  root: "./output"
+  predictions: "./output/predictions"
+  visualizations: "./output/visualizations"
+  reports: "./output/reports"
+
+# Configuration paths
+configs:
+  root: "./configs"
+

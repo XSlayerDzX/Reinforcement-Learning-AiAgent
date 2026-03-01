@@ -1,8 +1,4 @@
 from inference_sdk import InferenceHTTPClient
-import base64
-from PIL import Image
-from io import BytesIO
-from ClashRoyalData import TroopSide, ElixirDecode, ElixirCost
 
 API_URL = "http://localhost:9001"
 API_KEY = "obQog4mAaBRuPZZBIoti"

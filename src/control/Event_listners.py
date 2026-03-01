@@ -1,7 +1,6 @@
 from pynput import keyboard, mouse  # Importing keyboard and mouse listeners from the pynput library
-import StatePredictor  # Importing a custom module for state prediction
-import ClashRoyalData  # Importing a custom module for Clash Royale data handling
-from CardPredictor import ExtractSlots  # Importing the ExtractSlots function from the CardPredictor module
+from src.training import ClashRoyalData
+from src.vision.CardPredictor import ExtractSlots  # Importing the ExtractSlots function from the CardPredictor module
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
 img_path = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
@@ -40,11 +39,11 @@ def make_dpi_aware():
     except Exception:
         pass
 
-make_dpi_aware()
 
 def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540, 960)):
+    make_dpi_aware()
 
-
+    # global_x and global_y are the coordinates of the mouse click in the global screen space.
 
     # Find BlueStacks window handle by title
     hwnd = win32gui.FindWindow(None, "BlueStacks App Player 2")
@@ -54,18 +53,18 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
     # Get BlueStacks window position and size
     left2 , top2, right2, bottom2 = win32gui.GetClientRect(hwnd)
 
-    window_largeur = right2 - left2
-    window_hauteur = bottom2 - top2
+    window_largeur = right2 - 20
+    window_hauteur = bottom2 - 3
 
 
 
     # Convertir l'origine client (0,0) en coordonnées écran
     origin_x ,  origin_y = win32gui.ClientToScreen(hwnd, (0, 0))
-
+    print(f"origin_x: {origin_x}, origin_y: {origin_y}")
     # Calculate relative position inside the window
     rel_x = global_x - origin_x
     rel_y = global_y - origin_y
-
+    print( global_x, global_y, rel_x, rel_y  )
     # what do rel_x and rel_y represent here
     # Clamp relative position to window bounds
     # rel_x and rel_y should be between 0 and window_largeur/window_hauteur
@@ -82,6 +81,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
     bs_y = max(0,bs_y)  # ignore title bar area
 
     return bs_x , bs_y
+
 
 def on_click(x, y, button, pressed):
         """
@@ -126,8 +126,7 @@ print("Écoute en cours... Appuyez sur Echap pour quitter le clavier.")
 
 # --- 3. Maintien du programme en vie ---
 try:
-    # On demande au programme principal d'attendre que les listeners finissent.
-    # Si on_press retourne False (touche Echap), k_listener s'arrête.
+
     keyboard_listener.join()
     mouse_listener.join()
 except KeyboardInterrupt:

@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import argparse
 from typing import Tuple
-from Stream_to_frame import flux_capture_temporaire
+from src.vision.Stream_Frame import flux_capture_temporaire
 
 
 def load_template(path: Path):

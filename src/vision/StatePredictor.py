@@ -1,8 +1,5 @@
 from inference_sdk import InferenceHTTPClient
-import base64
-from PIL import Image
-from io import BytesIO
-from ClashRoyalData import TroopSide, ElixirDecode, ElixirCost
+from src.training.ClashRoyalData import TroopSide, ElixirDecode, ElixirCost
 
 API_URL = "http://localhost:9001"
 API_KEY = "obQog4mAaBRuPZZBIoti"
@@ -12,22 +9,23 @@ WORKFLOW  = "detect-count-and-visualize"
 IMG_PATH  = r"C:\Users\SK-TECH\Downloads\photo_2026-02-02_17-35-32.jpg"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
-
-result = client.run_workflow(
+def run_inference(img_path=IMG_PATH):
+    result = client.run_workflow(
     workspace_name=WORKSPACE,
     workflow_id=WORKFLOW,
     images={"image": IMG_PATH}
-)
+    )
+    return result
 
-
-imgbase = result[0]['img output']
+#imgbase = result[0]['img output']
 
 #img = base64.b64decode(imgbase)
 #img = Image.open(BytesIO(img))
 #img.show()
 
-x = result[0].pop('img output')
-def ExtractData(result):
+#x = result[0].pop('img output')
+def ExtractData(imsg_path=IMG_PATH):
+    result = run_inference()
     Slots = {} # slot_1 = "archers",slot_2 = "archers"
     Troops = {} # "knight" : (x,y), ally
     Towers = {} # "left_princess_tower" : ally
@@ -51,9 +49,9 @@ def ExtractData(result):
                         Towers.update({object["class"]: side})
                     elif "elixir" in object["class"]:
                         elixir = ElixirDecode[object["class"]]
-    return Slots, Troops, Towers, elixir
+    return Slots, Troops, elixir , Towers
 
-Slots, Troops, Towers, Elixir = ExtractData(result)
+Slots, Troops, Elixir,Towers  = ExtractData(IMG_PATH)
 if __name__ == "__main__":
  print("Slots:", Slots)
  print("Troops:", Troops)

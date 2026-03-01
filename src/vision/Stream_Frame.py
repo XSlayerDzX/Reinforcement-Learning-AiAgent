@@ -10,7 +10,7 @@ def flux_capture_temporaire(dossier_temp="temp_screens", intervalle=1.0):
     if not os.path.exists(dossier_temp):
         os.makedirs(dossier_temp)
 
-    # --- INITIALISATION of MSS ---
+
     with (mss.mss() as sct):
 
         # 2. Find BlueStacks window handle by title
@@ -66,21 +66,25 @@ def flux_capture_temporaire(dossier_temp="temp_screens", intervalle=1.0):
                 sct_img = sct.grab(monitor)
                 mss.tools.to_png(sct_img.rgb, sct_img.size, output=name_fichier)
 
+                zone = {"top": y, "left": x, "width": w, "height": h}
+
                 # Send the path to the main programme
-                yield name_fichier
+                yield name_fichier,zone
 
             except mss.exception.ScreenShotError as e:
                 print(f"Capture error (the window may be off-screen) : {e}")
 
-            # 5. NETTOYAGE
+            #os.remove(path_img)
             time.sleep(intervalle)
 
-# --- EXECUTION ---
-print("Starting monitoring...")
-try:
-    for path_img in flux_capture_temporaire(intervalle=1.0):
-        print(f"Traitement : {path_img}")
-except KeyboardInterrupt:
-    print("END")
-except Exception as e:
-    print(f"Fatal error : {e}")
+
+if __name__ == "__main__" :
+
+    print("Starting monitoring...")
+    try:
+        for path_img, zone in flux_capture_temporaire(intervalle=1.0):
+            print(f"Treatment : {path_img, zone}")
+    except KeyboardInterrupt:
+        print("END")
+    except Exception as e:
+        print(f"Fatal error : {e}")
