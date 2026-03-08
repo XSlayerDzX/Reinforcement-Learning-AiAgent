@@ -14,7 +14,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
 
     with mss.mss() as sct:
         # Find BlueStacks window handle by title
-        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
+        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 4")
 
         if not hwnd:
             # Fallback: partial search if the name changes
@@ -37,8 +37,8 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         # Get dynamic coordinates
         rect = win32gui.GetWindowRect(hwnd)
         x = rect[0]
-        y = rect[1] + 40  # Title bar offset
-        w = rect[2] - x - 40
+        y = rect[1] + 35  # Title bar offset
+        w = rect[2] - x - 32
         h = rect[3] - y
 
         # Fix negative borders
@@ -65,3 +65,4 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         except mss.exception.ScreenShotError as e:
             print(f"Capture error (off-screen?): {e}")
             return None
+Frame_Handler()

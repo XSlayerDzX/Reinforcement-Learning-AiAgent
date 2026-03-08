@@ -6,52 +6,49 @@ from Event_listners import *
 from Ai.Stream_to_frame import *
 from State_Tracker import *
 
-
-
-play = True
 id = 0
 match_id = 1
 mouse_listener , keyboard_listener = Start_Listeners()
 
-while play and id < 3:
+try:
+    while True:
 
-    current_frame = Frame_Handler(count=id)
+        current_frame = Frame_Handler(count=id)
 
-    if current_frame:
-        State_Tracker.Current_img = current_frame
-        row_dict = Create_Dataset_Row(current_frame, id, match_id)
-        if row_dict:
-            if State_Tracker.interrupt:
-                #State_Tracker.interrupt = False
-                #print("Interrupt received, creating dataset row with current card and position.")
-                #output = Output_Dataset_Schema(State_Tracker.CurrentCard, State_Tracker.pos_x, State_Tracker.pos_y, id)
-                #State_Tracker.CurrentCard = None
-                pass
+        if current_frame:
+            State_Tracker.Current_img = current_frame
+            row_dict = Create_Dataset_Row(current_frame, id, match_id)
+            State_Tracker.Current_Id = id
+            if row_dict:
+                match_dict_input["data"].append(row_dict)
+                print(f"Row {id} added to dataset.")
             else:
-                #output = Output_Dataset_Schema("wait", None, None, id)
-                pass
-            match_dict_input["data"].append(row_dict)
-            #match_dict_output["data"].append(output)
-            print(f"Row {id} added to dataset.")
-            id += 1
+                print(f"Failed to create dataset row for frame {id}. Skipping.")
+                os.remove(current_frame)
+                sleep(1)
+                continue
         else:
-            print(f"Failed to create dataset row for frame {id}. Skipping.")
-            #os.remove(current_frame)
-    else:
-        print("No frame captured. Skipping dataset row creation.")
-    id +=1
-    sleep(5)
+            print("No frame captured. Skipping dataset row creation.")
+            continue
+        id +=1
+        sleep(2)
 
-mouse_listener.stop()
-keyboard_listener.stop()
+except KeyboardInterrupt:
+    print("\nKeyboardInterrupt received. Saving data before exiting...")
 
-mouse_listener.join(timeout=1)
-keyboard_listener.join(timeout=1)
-print(match_dict_input)
-print(match_dict_output)
-df = pd.DataFrame(match_dict_input["data"])
-df = pd.concat([df, pd.DataFrame(match_dict_output["data"])], axis=1)
-df.to_csv(F"match_{match_id}.csv", index=False)
+finally:
+    mouse_listener.stop()
+    keyboard_listener.stop()
+
+    mouse_listener.join(timeout=1)
+    keyboard_listener.join(timeout=1)
+    print(f"input: {match_dict_input}")
+    print(f"output {match_dict_output}")
+    df_input = pd.DataFrame(match_dict_input["data"])
+    df_output = pd.DataFrame(match_dict_output["data"])
+    df_input.to_csv(F"match_input_{match_id}.csv", index=False)
+    df_output.to_csv(F"match_output_{match_id}.csv", index=False)
+    print("Data saved successfully.")
 
 
 

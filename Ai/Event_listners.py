@@ -31,7 +31,7 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
     make_dpi_aware()
 
     # Find BlueStacks window handle by title
-    hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
+    hwnd = win32gui.FindWindow(None, "BlueStacks App Player 4")
     if not hwnd:
         raise RuntimeError("BlueStacks window not found")
     else:
@@ -69,8 +69,11 @@ def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540,
 def Click_Validation(x,y):
     CurrentCard = State_Tracker.CurrentCard
     if State_Tracker.CurrentCard:
-        card_elix = ClashRoyalData.ElixirCost[CurrentCard]
-        current_elix = State_Tracker.CurrentElixir
+        try:
+            card_elix = ClashRoyalData.ElixirCost[CurrentCard]
+        except:
+            card_elix = 4
+        current_elix = State_Tracker.CurrentElixir + 1 # added 1 incase of delay in predection
         if current_elix >= card_elix:
             print(f"Click at BlueStacks coordinates: ({x}, {y}) is valid for card: {State_Tracker.CurrentCard}")
             State_Tracker.CurrentElixir = abs(current_elix - card_elix)
@@ -79,10 +82,10 @@ def Click_Validation(x,y):
             print(f"Not enough elixir for card: {State_Tracker.CurrentCard}. Current elixir: {current_elix}, required: {card_elix}. Click ignored.")
             return False
     else:
-        print("No current card selected. Click ignored.")
+        return False
 
 
-def on_click(x,y,pressed):
+def on_click(x,y,button,pressed):
     """
     Handles mouse click events and converts the coordinates to BlueStacks coordinates.
     :param x: Global X coordinate of the mouse click.
@@ -91,22 +94,22 @@ def on_click(x,y,pressed):
     :param pressed: Boolean indicating whether the button was pressed.
     """
     if pressed:
-        windows = gw.getWindowsWithTitle("BlueStacks App Player 1")
+        windows = gw.getWindowsWithTitle("BlueStacks App Player 4")
         if not windows:
             raise RuntimeError("BlueStacks window not found.")
         window = windows[0]
         new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
+        State_Tracker.interrupt = True
         #print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
-        Validated = True#Click_Validation(new_x, new_y)
-        if Validated:
+        Validated = Click_Validation(new_x, new_y)
+        if Validated and State_Tracker.interrupt:
             id = State_Tracker.Current_Id
-            State_Tracker.interrupt = True
             print("click validated, interrupting dataset creation and updating state tracker...")
             output = Output_Dataset_Schema(State_Tracker.CurrentCard, new_x, new_y, id)
             match_dict_output["data"].append(output)
+            State_Tracker.interrupt = False
             State_Tracker.pos_x = new_x
             State_Tracker.pos_y = new_y
-            print(f"x: {State_Tracker.pos_x}, y: {State_Tracker.pos_y}")
         else:
             print("Click was not valid, no action taken.")
 
@@ -124,7 +127,7 @@ def CurrentCard(keypressed,img):
         slots = ExtractSlot(img)
         current = slots.get(f"slot_{keypressed}")  #3 Get the card in the corresponding slot
         if current:
-            print(f"this is the selected card: {current}")
+            #print(f"this is the selected card: {current}")
             State_Tracker.CurrentCard = current  # Update the current card in ClashRoyalData2
         else:
             print(f"No card found in slot {key}")
