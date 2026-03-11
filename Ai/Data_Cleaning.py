@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
+from sympy import pretty_print
 
-set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\linked_dataset.csv"
+set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\datasets\linked_dataset.csv"
 df = pd.read_csv(set)
 
 
@@ -61,4 +62,52 @@ def general_cleaning(match_csv):
 ## whats needs to be added :
 
 ## grid system instead of pos_x and pos_y
+
+arena_w  = 540
+arena_h = 960
+
+Grid_w = 9
+Grid_h = 18
+
+def pixel_to_grid_x(x_px):
+    gx = int(x_px / arena_w  * Grid_w)
+    gx = min(max(gx, 0), Grid_w - 1)
+    return gx
+
+def pixel_to_grid_y(y_px):
+    gy = int(y_px / arena_h * Grid_h)
+    gy = min(max(gy, 0), Grid_h - 1)
+    return gy
+
+# def grid_to_pixel(gx, gy):
+#     x_px = (gx + 0.5) / Grid_w * arena_w
+#     y_px = (gy + 0.5) / Grid_h * arena_h
+#     return x_px, y_px
+
+def clean_positions(match_csv):
+    df = pd.read_csv(match_csv)
+
+    pos_col = [col for col in df.columns if col.endswith("_x") or col.endswith("_y")]
+
+    for col in pos_col:
+        cleaned_col = (df[col] != -1)
+        df.loc[cleaned_col, col] = df.loc[cleaned_col, col].apply(lambda px: pixel_to_grid_x(px) if col.endswith("_x") else pixel_to_grid_y(px))
+    print("cleaned positions done")
+    return df
+
+
+
+new = clean_positions(match_csv=set)
+pretty_print(new)
+
+
+
+
+
+
+
+
+
+
+
 

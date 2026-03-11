@@ -1,7 +1,7 @@
 # python
 from pynput import keyboard, mouse  # Importing keyboard and mouse listeners from the pynput library
 import ClashRoyalData  # Importing a custom module for Clash Royale data handling
-from CardPredictor import ExtractSlot  # Importing the ExtractSlots function from the CardPredictor module
+from Ai.Roboflow.CardPredictor import ExtractSlot  # Importing the ExtractSlots function from the CardPredictor module
 import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
 from Create_DataSet import *
