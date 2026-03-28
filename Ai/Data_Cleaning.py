@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from ClashRoyalData import *
 from sympy import pretty_print
 
 set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\datasets\linked_dataset.csv"
@@ -95,12 +96,18 @@ def clean_positions(match_csv):
     print("cleaned positions done")
     return df
 
+def card_avable(match_csv):
+    df = pd.read_csv(match_csv)
 
+    cards_avab_col = ["archers","giant","minions","goblin cage","goblin gang","goblin hut","goblins","knight","mini pekka","musketeer","spear goblins"]
+    for col in cards_avab_col:
+        rows = (df["slot_1"] == col) | (df["slot_2"] == col) | (df["slot_3"] == col) | (df["slot_4"] == col)
+        df[col+"_avab"] = 0
+        df.loc[rows["Elixir"]>=ElixirCost[col], col+"_avab"] = 1
+    print("card availability done")
+    df.to_csv(match_csv, index=False)
 
-new = clean_positions(match_csv=set)
-pretty_print(new)
-
-
+#possibly drop the slot columns after creating the availability columns (to be decided)
 
 
 
