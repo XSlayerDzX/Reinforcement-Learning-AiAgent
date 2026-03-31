@@ -128,7 +128,8 @@ def CurrentCard(keypressed,img):
         current = slots.get(f"slot_{keypressed}")  #3 Get the card in the corresponding slot
         if current:
             #print(f"this is the selected card: {current}")
-            State_Tracker.CurrentCard = current  # Update the current card in ClashRoyalData2
+            State_Tracker.CurrentCard = current  # Update the current card in ClashRoyalData
+            State_Tracker.output_action_cards[State_Tracker.Current_Id] = current  # Store the selected card for the current dataset row
         else:
             print(f"No card found in slot {key}")
     except Exception as e:

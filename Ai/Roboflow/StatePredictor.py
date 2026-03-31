@@ -2,8 +2,8 @@ from inference_sdk import InferenceHTTPClient
 import base64
 from PIL import Image
 from io import BytesIO
-from ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
-import State_Tracker
+from Ai.ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
+from Ai import State_Tracker
 
 
 API_URL = "http://localhost:9001"
@@ -71,7 +71,7 @@ def ExtractData(imgpath):
     except Exception as e:
         return None
 
-#Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
+# Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
 # if __name__ == "__main__":
 #  print("Slots:", Slots)
 #  print("Troops:", Troops_ally)

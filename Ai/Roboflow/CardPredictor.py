@@ -2,14 +2,14 @@ from inference_sdk import InferenceHTTPClient
 import base64
 from PIL import Image
 from io import BytesIO
-from ClashRoyalData import TroopSide, ElixirDecode, ElixirCost
+from Ai.ClashRoyalData import TroopSide, ElixirDecode, ElixirCost
 
 API_URL = "http://localhost:9001"
 API_KEY = "obQog4mAaBRuPZZBIoti"
 
 WORKSPACE = "clashroyalbot-z9idj"
 WORKFLOW  = "detect-and-classify"
-IMG_PATH  = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
+IMG_PATH  = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 

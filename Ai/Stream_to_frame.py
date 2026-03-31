@@ -65,4 +65,3 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         except mss.exception.ScreenShotError as e:
             print(f"Capture error (off-screen?): {e}")
             return None
-Frame_Handler()

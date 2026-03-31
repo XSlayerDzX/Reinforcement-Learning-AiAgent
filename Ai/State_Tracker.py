@@ -17,6 +17,9 @@ match_dict_output = {
     "data" : [],
 }
 
+output_action_cards = {
+    # "id" : "action"
+}
 
 
 # import win32gui
