@@ -26,43 +26,33 @@ def make_dpi_aware():
         pass
 
 def convert_to_bluestacks_coords(global_x, global_y, bluestacks_resolution=(540, 960)):
-
-    # Ensure DPI awareness is configured before any coordinate calculations
     make_dpi_aware()
 
-    # Find BlueStacks window handle by title
     hwnd = win32gui.FindWindow(None, "BlueStacks App Player 4")
     if not hwnd:
         raise RuntimeError("BlueStacks window not found")
-    else:
-        print(f"Found BlueStacks window handle: {hwnd}")
 
-    # Get BlueStacks window position and size
     left2, top2, right2, bottom2 = win32gui.GetClientRect(hwnd)
-
     window_width = right2 - left2
     window_height = bottom2 - top2
 
-    # Convert the client origin (0,0) to screen coordinates
-    origin_x, origin_y = win32gui.ClientToScreen(hwnd, (0, 0))
+    # Validate window dimensions before proceeding
+    if window_width <= 0 or window_height <= 0:
+        raise ValueError(f"Invalid window dimensions: width={window_width}, height={window_height}")
 
-    # Calculate relative position inside the window
+    origin_x, origin_y = win32gui.ClientToScreen(hwnd, (0, 0))
     rel_x = global_x - origin_x
     rel_y = global_y - origin_y
 
-    # what do rel_x and rel_y represent here
-    # Clamp relative position to window bounds
-    # rel_x and rel_y should be between 0 and window_width/window_height
     rel_x = max(0, min(rel_x, window_width))
     rel_y = max(0, min(rel_y, window_height))
 
     virtual_w, virtual_h = bluestacks_resolution
-
-    px_brd = 36.4 # pixels border to ignore the title bar and borders
+    px_brd = 36.4
 
     bs_x = round((rel_x * virtual_w / window_width), 2)
     bs_y = round((rel_y - px_brd) * virtual_h / (window_height - px_brd), 2)
-    bs_y = max(0, bs_y)  # ignore title bar area
+    bs_y = max(0, bs_y)
 
     return bs_x, bs_y
 
@@ -85,33 +75,32 @@ def Click_Validation(x,y):
         return False
 
 
-def on_click(x,y,button,pressed):
-    """
-    Handles mouse click events and converts the coordinates to BlueStacks coordinates.
-    :param x: Global X coordinate of the mouse click.
-    :param y: Global Y coordinate of the mouse click.
-    :param button: The mouse button that was clicked.
-    :param pressed: Boolean indicating whether the button was pressed.
-    """
+def on_click(x, y, button, pressed):
     if pressed:
-        windows = gw.getWindowsWithTitle("BlueStacks App Player 4")
-        if not windows:
-            raise RuntimeError("BlueStacks window not found.")
-        window = windows[0]
-        new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
-        State_Tracker.interrupt = True
-        #print(f"bluestacks_x: {new_x}, bluestacks_y: {new_y}")
-        Validated = Click_Validation(new_x, new_y)
-        if Validated and State_Tracker.interrupt:
-            id = State_Tracker.Current_Id
-            print("click validated, interrupting dataset creation and updating state tracker...")
-            output = Output_Dataset_Schema(State_Tracker.CurrentCard, new_x, new_y, id)
-            match_dict_output["data"].append(output)
-            State_Tracker.interrupt = False
-            State_Tracker.pos_x = new_x
-            State_Tracker.pos_y = new_y
-        else:
-            print("Click was not valid, no action taken.")
+        try:
+            windows = gw.getWindowsWithTitle("BlueStacks App Player 4")
+            if not windows:
+                print("BlueStacks window not found. Click ignored.")
+                return
+
+            new_x, new_y = convert_to_bluestacks_coords(x, y, bluestacks_resolution=(540, 960))
+            State_Tracker.interrupt = True
+
+            Validated = Click_Validation(new_x, new_y)
+            if Validated and State_Tracker.interrupt:
+                id = State_Tracker.Current_Id
+                print("click validated, interrupting dataset creation and updating state tracker...")
+                output = Output_Dataset_Schema(State_Tracker.CurrentCard, new_x, new_y, id)
+                match_dict_output["data"].append(output)
+                State_Tracker.interrupt = False
+                State_Tracker.pos_x = new_x
+                State_Tracker.pos_y = new_y
+            else:
+                print("Click was not valid, no action taken.")
+        except (ValueError, RuntimeError) as e:
+            print(f"Error processing click: {e}. Click ignored.")
+        except Exception as e:
+            print(f"Unexpected error in on_click: {type(e).__name__}: {e}")
 
 def CurrentCard(keypressed,img):
     """

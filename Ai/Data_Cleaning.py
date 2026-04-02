@@ -107,9 +107,56 @@ def card_avable(match_csv):
     print("card availability done")
     df.to_csv(match_csv, index=False)
 
-#possibly drop the slot columns after creating the availability columns (to be decided)
 
 
+
+def clean_output_with_groundtruth(
+    output_df: pd.DataFrame,
+    validation_df: pd.DataFrame,) -> pd.DataFrame:
+
+    out = output_df.copy()
+    out = out.reset_index().rename(columns={"index": "orig_idx"})
+
+
+    val_map = (
+        validation_df
+        .drop_duplicates(subset=["id"])       # just in case
+        .set_index("id")["action"]
+    )
+
+    gt_actions = out["id"].map(val_map)
+
+    out.loc[gt_actions.notna(), "action"] = gt_actions[gt_actions.notna()]
+
+    out = out.sort_values("orig_idx")
+
+    out = out.drop_duplicates(subset=["id"], keep="first")
+
+    out = out.sort_values("orig_idx")
+
+    consecutive_same_action = out["action"].eq(out["action"].shift(1))
+
+    out = out[~consecutive_same_action]
+
+    if "pos_x" in out.columns and "pos_y" in out.columns:
+        zero_pos_mask = (out["pos_x"] == 0) & (out["pos_y"] == 0)
+        out = out[~zero_pos_mask]
+
+    out = (
+        out
+        .sort_values("orig_idx")
+        .drop(columns=["orig_idx"])
+        .reset_index(drop=True)
+    )
+
+    return out
+
+# output10 = pd.read_csv(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets\match_output_10.csv")
+# val10    = pd.read_csv(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets\match_output_action_validation_10.csv")
+#
+# clean10 = clean_output_with_groundtruth(output10, val10)
+#
+# clean10.to_csv("match_output_10_cleaned.csv", index=False)
 
 
 

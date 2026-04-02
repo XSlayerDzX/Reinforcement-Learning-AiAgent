@@ -1,3 +1,4 @@
+import os
 from os import waitpid
 from time import sleep
 import pandas as pd
@@ -7,7 +8,7 @@ from Ai.Stream_to_frame import *
 from State_Tracker import *
 
 id = 0
-match_id = 2
+match_id = 18
 mouse_listener , keyboard_listener = Start_Listeners()
 
 try:
@@ -46,12 +47,20 @@ finally:
     print(f"output {match_dict_output}")
     df_input = pd.DataFrame(match_dict_input["data"])
     df_output = pd.DataFrame(match_dict_output["data"])
-    df_input.to_csv(F"match_input_{match_id}.csv", index=False)
-    df_output.to_csv(F"match_output_{match_id}.csv", index=False)
-    # output action validation is a separate dataset that links the selected card for each dataset row, this will be used to validate the output dataset and check if the action taken is correct based on the selected card
-    df_output_action_validation = pd.DataFrame(list(State_Tracker.output_action_cards.items()), columns=['id', 'action'])
-    df_output_action_validation.to_csv(F"match_output_action_validation_{match_id}.csv", index=False)
+
+    save_dir = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets"
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    df_input.to_csv(f"{save_dir}/match_input_{match_id}.csv", index=False)
+    df_output.to_csv(f"{save_dir}/match_output_{match_id}.csv", index=False)
+
+    # Output action validation dataset
+    df_output_action_validation = pd.DataFrame(list(State_Tracker.output_action_cards.items()),
+                                               columns=['id', 'action'])
+    df_output_action_validation.to_csv(f"{save_dir}/match_output_action_validation_{match_id}.csv", index=False)
     print("Data saved successfully.")
+
 
 
 
