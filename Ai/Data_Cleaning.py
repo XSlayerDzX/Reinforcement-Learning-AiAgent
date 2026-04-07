@@ -4,39 +4,36 @@ from ClashRoyalData import *
 from sympy import pretty_print
 
 set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\datasets\linked_dataset.csv"
-df = pd.read_csv(set)
 
 
 def link_frames(input_csv, output_csv,match_id):
     # Load the input and output datasets
-    df_input = pd.read_csv(input_csv)
-    df_output = pd.read_csv(output_csv)
+    # df_input = pd.read_csv(input_csv)
+    # df_output = pd.read_csv(output_csv)
 
     # Ensure both datasets have a common 'id' column for linking
-    if 'id' not in df_input.columns or 'id' not in df_output.columns:
-        raise ValueError("Both datasets must contain an 'id' column for linking.")
 
     # Merge the datasets on the 'id' column
-    linked_df = pd.merge(df_input, df_output, on='id', how='left')
+    linked_df = pd.merge(input_csv, output_csv, on='id', how='left')
     print(linked_df)
     print(linked_df.shape)
 
     # Save the linked dataset to a new CSV file
-    linked_df.to_csv(f"match_{match_id}_dataset.csv",index=False)
+    return linked_df
 
 
 
 def output_cleaning(match_csv):
-    df = pd.read_csv(match_csv)
+    df = match_csv
 
     df["action"] = df["action"].fillna("wait")
     df["pos_x"] = df["pos_x"].fillna(-1)
     df["pos_y"] = df["pos_y"].fillna(-1)
     print("output cleaned")
-    df.to_csv(match_csv, index=False)
+    return df
 
 def slot_cleaning(match_csv):
-    df = pd.read_csv(match_csv)
+    df = match_csv
 
     for slot in ["slot_1", "slot_2", "slot_3", "slot_4"]:
 
@@ -49,16 +46,15 @@ def slot_cleaning(match_csv):
             if pd.isnull(df.at[index, slot]):
                 df.at[index, slot] = df.at[index + 1, slot]
 
-    print("slots cleaned")
-    df.to_csv(match_csv, index=False)
+    return df
 
 def general_cleaning(match_csv):
-    df = pd.read_csv(match_csv)
+    df = match_csv
 
     df.fillna(-1, inplace=True)
 
     print("general cleaning done")
-    df.to_csv(match_csv, index=False)
+    return df
 
 ## whats needs to be added :
 
@@ -86,7 +82,7 @@ def pixel_to_grid_y(y_px):
 #     return x_px, y_px
 
 def clean_positions(match_csv):
-    df = pd.read_csv(match_csv)
+    df = match_csv
 
     pos_col = [col for col in df.columns if col.endswith("_x") or col.endswith("_y")]
 
@@ -97,15 +93,22 @@ def clean_positions(match_csv):
     return df
 
 def card_avable(match_csv):
-    df = pd.read_csv(match_csv)
+        df = match_csv
 
-    cards_avab_col = ["archers","giant","minions","goblin cage","goblin gang","goblin hut","goblins","knight","mini pekka","musketeer","spear goblins"]
-    for col in cards_avab_col:
-        rows = (df["slot_1"] == col) | (df["slot_2"] == col) | (df["slot_3"] == col) | (df["slot_4"] == col)
-        df[col+"_avab"] = 0
-        df.loc[rows["Elixir"]>=ElixirCost[col], col+"_avab"] = 1
-    print("card availability done")
-    df.to_csv(match_csv, index=False)
+        cards_avab_col = ["archers","giant","minions","goblin cage","goblin gang","goblin hut","goblins","knight","mini pekka","musketeer","spear goblins"]
+
+        # Create all availability columns at once to avoid fragmentation
+        new_cols = {}
+        for col in cards_avab_col:
+            rows = (df["slot_1"] == col) | (df["slot_2"] == col) | (df["slot_3"] == col) | (df["slot_4"] == col)
+            avail = (rows & (df["Elixir"] >= ElixirCost[col])).astype(int)
+            new_cols[col + "_avab"] = avail
+
+        # Concatenate all new columns at once
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+        print("card availability done")
+        return df
 
 
 
@@ -157,6 +160,30 @@ def clean_output_with_groundtruth(
 # clean10 = clean_output_with_groundtruth(output10, val10)
 #
 # clean10.to_csv("match_output_10_cleaned.csv", index=False)
+
+def final_clean(input,output,val,match_id):
+    input_df = pd.read_csv(input)
+    output_uncleaned_df = pd.read_csv(output)
+    val_df = pd.read_csv(val)
+
+    output_df = clean_output_with_groundtruth(output_uncleaned_df, val_df)
+
+    df = link_frames(input_df,output_df,match_id)
+    df = output_cleaning(df)
+    df = slot_cleaning(df)
+    df = general_cleaning(df)
+    df = clean_positions(df)
+    df = card_avable(df)
+
+    df.to_csv(f"match_{match_id}_final_cleaned_dataset.csv", index=False)
+
+input = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_input_18.csv"
+output = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_18.csv"
+val = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_action_validation_18.csv"
+
+final_clean(input,output,val,18)
+
+
 
 
 
