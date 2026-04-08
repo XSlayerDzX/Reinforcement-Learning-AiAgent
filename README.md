@@ -1,296 +1,181 @@
-# 🤖 Clash Royale AI Agent
+# 🤖 Clash Royale RL/IL Agent
 
-An AI agent that uses **Computer Vision**, **Behavior Cloning (Imitation Learning)**, and **Reinforcement Learning** to play Clash Royale autonomously.
-
-> **Project Status:** 🚧 Under Development - Second Year Computer Science Project at the Higher School of Computer Science
+An AI agent that uses Computer Vision, Behavior Cloning, Offline RL, and Online RL to play Clash Royale from BlueStacks screenshots.
 
 ---
 
-## 📋 Table of Contents
+## 🎯 Project Idea
 
-- [Architecture Overview](#-architecture-overview)
-- [Why Two Phases?](#-why-two-phases)
-- [What's Implemented ✅](#-whats-implemented-)
-- [What's Left 📝](#-whats-left-)
-- [Project Structure](#-project-structure)
-- [How It Works](#-how-it-works)
-- [Setup & Requirements](#-setup--requirements)
+Use one unified pipeline and dataset to compare three policy-learning approaches:
 
----
+1. Behavior Cloning with LSTM – imitate a human player from recorded trajectories.
+2. Decision Transformer (Offline RL) – learn a return-conditioned policy from the same offline data.
+3. PPO (Online RL) – start from the best offline policy and fine-tune directly in the environment.
 
-## 🏗️ Architecture Overview
+High-level diagram:
 
-The project follows a **two-phase learning approach** where Reinforcement Learning benefits from the pre-trained Imitation Learning model:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    PHASE 1: IMITATION LEARNING (Warm Start)                  │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                    │
-│  │  Human Plays │───▶│  Record State│───▶│  Supervised  │                    │
-│  │  (BlueStacks)│    │   + Actions  │    │    Training  │                    │
-│  └──────────────┘    └──────────────┘    └──────────────┘                    │
-│                                                      │                       │
-│                                                      ▼                       │
-│                                            ┌─────────────────┐              │
-│                                            │  Pretrained     │              │
-│                                            │  Policy Network │──────────────┼──────┐
-│                                            │  (Knowledge)    │              │      │
-│                                            └─────────────────┘              │      │
-└─────────────────────────────────────────────────────────────────────────────┘      │
-                                                                                     │
-                                          │                                          │
-                                          │  WEIGHTS INITIALIZATION                  │
-                                          │  (Not random weights!)                   │
-                                          ▼                                          │
-┌─────────────────────────────────────────────────────────────────────────────┐      │
-│                  PHASE 2: REINFORCEMENT LEARNING (Fine-tuning)               │      │
-│                                                                              │      │
-│   ┌─────────────────┐      ┌──────────────┐      ┌──────────────┐           │      │
-│   │  Pretrained     │─────▶│   AI Agent   │─────▶│   Observe    │           │      │
-│   │  Weights from   │      │    Plays     │      │   Rewards    │           │      │
-│   │  Imitation      │      └──────────────┘      └──────┬───────┘           │      │
-│   └─────────────────┘              ▲                   │                    │      │
-│                                    │                   │                    │      │
-│                                    └───────────────────┘                    │      │
-│                                            (Policy Update Loop)              │      │
-│                                                                              │      │
-│   Benefits:                                                                  │      │
-│   ✓ Starts with meaningful policy (not random)                               │      │
-│   ✓ Faster convergence                                                       │      │
-│   ✓ Better exploration in early episodes                                     │      │
-│   ✓ Avoids catastrophic early failures                                       │      │
-└─────────────────────────────────────────────────────────────────────────────┘◄─────┘
-```
+[Screen + Human Input]
+        |
+        v
+[State & Action Dataset] ----> [Reward & RTG]
+        |
+        |----> BC-LSTM (Behavior Cloning)
+        |----> Decision Transformer (Offline RL)
+        v
+[Best Offline Policy Weights]
+        |
+        v
+        PPO (Online RL Fine-Tuning)
 
 ---
 
-## 🎯 Why Two Phases?
+## 🏗️ What the Codebase Already Does
 
-### The Problem with Pure RL
-Training an RL agent from **random weights** in a complex game like Clash Royale is extremely difficult:
-- ❌ Agent makes completely random moves initially
-- ❌ Takes forever to learn basic game mechanics
-- ❌ May never discover good strategies through random exploration
-- ❌ Catastrophic performance in early training phases
+### Perception / State Extraction
 
-### The Solution: Imitation Learning → RL
+- StatePredictor.py – Roboflow workflow for:
+  - Troops (class, side, position, elixir cost)
+  - Towers (which side)
+  - Elixir amount
+- CardPredictor.py – Roboflow workflow to detect cards in hand for slots 1–4.
 
-| Phase | Purpose | Benefit for Next Phase |
-|-------|---------|----------------------|
-| **Phase 1: Imitation Learning** | Learn from human demonstrations | Provides a **pretrained policy** with basic game knowledge |
-| **Phase 2: RL Fine-tuning** | Improve beyond human performance | Starts from a **good baseline** instead of random weights |
+### Data Collection
 
-### Key Advantage
-> 🧠 The RL agent **inherits the pretrained weights** from the imitation learning model, giving it a **"warm start"**. Instead of starting with random actions, it starts with human-level gameplay and learns to optimize from there.
+- Stream_to_frame.py – captures BlueStacks frames with mss and window geometry.
+- Event_listners.py – keyboard/mouse listeners:
+  - Keys 1–4 = choose card slot
+  - Mouse click = placement; validated against elixir and current card
+- State_Tracker.py – holds current image, id, card, elixir, towers, troops, slots, and intermediate dictionaries.
+- Create_DataSet.py – builds a feature row per frame:
+  - Slots, elixir, tower flags
+  - Ally/enemy card presence and (x, y)
+  - Dense ally-enemy distance features
+- DataSet_Handler.py – main loop:
+  - Captures frames, extracts features
+  - Logs actions + positions on validated clicks
+  - Saves per-match CSVs:
+    - match_input_{id}.csv
+    - match_output_{id}.csv
+    - match_output_action_validation_{id}.csv
 
----
+### Data Cleaning & Reward
 
-## ✅ What's Implemented
+- Data_Cleaning.py:
+  - Merges input/output/validation on id
+  - Fills missing actions as "wait", missing positions as -1
+  - Fixes slot histories (back-filling last valid card)
+  - Converts all position columns to a 9×18 grid, keeping -1 as “no unit/no position”
+  - Adds per-card *_avab flags based on slots and elixir (archers_avab, giant_avab, etc.)
+  - Writes match_{id}_final_cleaned_dataset.csv per match
+- Reward_System.py:
+  - Adds a reward column r:
+    - +0.15 when enemy troops disappear
+    - -0.01 when enemy troops stay alive across frames
+    - -0.4 when ally towers die
+    - +0.75 when enemy towers die
+  - Computes returns-to-go rtg per frame (gamma=1) and saves {...}_rewarded.csv
 
-### 1️⃣ Computer Vision Pipeline
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **StatePrediction** | ✅ Done | Detects troops, towers, and elixir level from game screenshots using Roboflow Inference API |
-| **CardPrediction** | ✅ Done | Identifies cards in the player's hand (4 slots) using Roboflow workflows |
-| **Object Detection** | ✅ Done | YOLO-based ONNX inference pipeline for local object detection |
-| **Data Mapping** | ✅ Done | Dictionaries for elixir costs, troop sides (ally/enemy), and tower classification |
-
-**Key Features:**
-- Real-time detection of 13+ card types (Archers, Giant, Minions, Goblin Cage, etc.)
-- Elixir level recognition (0-10)
-- Troop position tracking (x, y coordinates)
-- Ally/Enemy classification for all entities
-
-### 2️⃣ Data Collection (Behavior Cloning Setup)
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **Mouse Listener** | ✅ Done | Captures mouse clicks and converts screen coords to BlueStacks coordinates |
-| **Keyboard Listener** | ✅ Done | Detects F1-F4 key presses for card selection |
-| **DPI Awareness** | ✅ Done | Handles high-DPI display scaling for accurate coordinate mapping |
-| **Coordinate Conversion** | ✅ Done | Converts global screen coordinates to BlueStacks virtual resolution (540x960) |
-
-### 3️⃣ Data Processing Utilities
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **Video to Frames** | ✅ Done | Converts gameplay videos to frame-by-frame images for dataset creation |
-| **Frame Extraction** | ✅ Done | Configurable step size for frame sampling |
-
-### 4️⃣ Model Infrastructure
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **ONNX Runtime** | ✅ Done | ObjectFinder class for running ONNX models with NMS |
-| **Roboflow API** | ✅ Done | HTTP client for workflow-based inference |
-
-### ⚠️ Experimental (Not Part of Main Project)
-| Component | Status | Description |
-|-----------|--------|-------------|
-| **AdbControle.py** | 🧪 Experimental | ADB integration was explored but **not part of the main pipeline** |
-| **test.py** | 🧪 Experimental | ADB debugging script |
+The rewarded, cleaned match CSVs are the base for both BC-LSTM and Decision Transformer.
 
 ---
 
-## 📝 What's Left
+## 🔬 Planned Experiments
 
-### 🔴 Phase 1: Behavior Cloning (Imitation Learning)
-| Task | Priority | Description |
-|------|----------|-------------|
-| **Dataset Builder** | 🔴 High | Combine recorded (State, Action) pairs into training dataset |
-| **Action Encoder** | 🔴 High | Define action space: which card → where to play (x, y) |
-| **Neural Network Model** | 🔴 High | Build CNN + MLP model that takes game state → predicts action |
-| **Training Script** | 🔴 High | Supervised learning loop for behavior cloning |
-| **Model Evaluation** | 🟡 Medium | Validation metrics for imitation learning performance |
-| **Save Pretrained Weights** | 🔴 High | Export model weights for RL phase initialization |
+### 1️⃣ Behavior Cloning with LSTM
 
-### 🔴 Phase 2: Reinforcement Learning (Using Pretrained Weights!)
-| Task | Priority | Description |
-|------|----------|-------------|
-| **Environment Wrapper** | 🔴 High | OpenAI Gym/Gymnasium interface for Clash Royale |
-| **Reward Function** | 🔴 High | Design reward signals (tower damage, elixir advantage, win/loss, etc.) |
-| **Load Pretrained Weights** | 🔴 High | Initialize RL policy network with imitation learning weights |
-| **RL Algorithm** | 🔴 High | Implement PPO, DQN, or similar RL algorithm |
-| **Action Execution** | 🔴 High | Send commands to game (mouse/keyboard automation) |
-| **State Representation** | 🟡 Medium | Vectorized state space for RL agent |
-| **Self-Play Loop** | 🟡 Medium | Automated gameplay with learning from interactions |
+- Inputs per timestep:
+  - Game state features from the cleaned CSVs (elixir, tower flags, per-card ally/enemy presence and grid positions, distance features, *_avab flags, etc.)
+- Outputs:
+  - Action head: multi-class over {wait} ∪ {all deck cards}
+  - Position head: either grid-based (gx, gy) or continuous (x, y) for card placement
+- Handling:
+  - Class imbalance: weighted cross-entropy so "wait" doesn’t dominate
+  - Position loss masked when action is "wait" (pos = -1)
+  - At inference, action logits are masked to only allow cards with *_avab == 1 and sufficient elixir
 
-### 🟡 Infrastructure & Polish
-| Task | Priority | Description |
-|------|----------|-------------|
-| **Real-time Screen Capture** | 🟡 Medium | Continuous screenshot pipeline (e.g., using mss or dxcam) |
-| **Configuration System** | 🟢 Low | YAML/JSON config for paths, API keys, hyperparameters |
-| **Logging & Monitoring** | 🟢 Low | TensorBoard/WandB integration for training visualization |
-| **Requirements.txt** | 🟢 Low | Document all Python dependencies |
-| **Documentation** | 🟢 Low | Code comments, docstrings, usage examples |
+### 2️⃣ Decision Transformer (Offline RL)
+
+- Uses sequences of (state, action, reward, rtg) from the rewarded CSVs.
+- Learns a return-conditioned policy:
+  - Input: (rtg_t, state_t, action_{t-1}, ...)
+  - Output: next action
+- Objective: reach higher win-rate / returns than pure BC on the same offline data.
+
+### 3️⃣ PPO with Warm Start
+
+- Custom environment built around the same state representation.
+- PPO policy network initialized from:
+  - The BC-LSTM policy or
+  - The Decision Transformer policy head (whichever performs best offline)
+- Trains by interacting with the game using a similar reward signal to Reward_System.py.
 
 ---
 
-## 📁 Project Structure
+## 📦 Project Structure (Simplified)
 
-```
 Reinforcement-Learning-AiAgent/
-│
-├── 📄 README.md                 # This file
-│
-├── 🤖 Core Modules
-│   ├── StatePredictor.py        # Game state detection (troops, towers, elixir)
-│   ├── CardPredictor.py         # Hand card detection from screenshots
-│   ├── ClashRoyalData.py        # Game data: elixir costs, troop sides
-│   └── Train.py                 # ONNX object detection utilities
-│
-├── 🎮 Data Collection
-│   └── Event_listners.py        # Mouse/keyboard listeners for recording (State, Action) pairs
-│
-├── 🛠️ Utilities
-│   ├── Clip_To_Frames.py        # Video to frames converter
-│   ├── AdbControle.py           # ⚠️ EXPERIMENTAL: ADB (not part of main project)
-│   └── test.py                  # ⚠️ EXPERIMENTAL: ADB testing
-│
-└── 🧠 Future Modules (To Be Created)
-    ├── dataset_builder.py       # (TODO) Build behavior cloning dataset
-    ├── behavior_cloning.py      # (TODO) Imitation learning training
-    ├── rl_environment.py        # (TODO) Gym environment wrapper
-    ├── rl_agent.py              # (TODO) RL agent with pretrained weight loading
-    └── action_executor.py       # (TODO) Execute actions (mouse automation)
-```
+|
+|-- Core CV & State
+|   |-- StatePredictor.py
+|   |-- CardPredictor.py
+|   |-- ClashRoyalData.py
+|   |-- State_Tracker.py
+|
+|-- Data Collection
+|   |-- Stream_to_frame.py
+|   |-- Event_listners.py
+|   |-- Create_DataSet.py
+|   |-- DataSet_Handler.py
+|
+|-- Data Cleaning & Rewards
+|   |-- Data_Cleaning.py
+|   |-- Reward_System.py
+|
+|-- BC-LSTM (notebooks / WIP)
+|   |-- BC_LSTM_Data.ipynb
+|   |-- BC_LSTM_Model.ipynb
+|   |-- BC_LSTM_Training.ipynb
+|   |-- BC_LSTM_Inference.ipynb
+|
+|-- Future RL Components (planned)
+    |-- DecisionTransformer_*.py
+    |-- PPO_Agent_*.py
+    |-- Env_Wrapper.py
+    |-- Evaluation_*.py
 
 ---
 
-## 🔧 How It Works
+## 🗺️ Roadmap
 
-### Step 1: State Extraction
-```python
-# StatePredictor.py extracts:
-Slots  = {"slot_1": "archers", "slot_2": "giant", ...}  # Cards in hand
-Troops = {"knight": ((x, y), "ally", 3), ...}           # Troop positions + side
-Towers = {"king_tower": "ally", ...}                    # Tower ownership
-Elixir = 7                                               # Current elixir (0-10)
-```
-
-### Step 2: Action Recording (Behavior Cloning)
-```python
-# Event_listners.py captures:
-Keyboard: F1-F4 selects card slot
-Mouse:    Click position (x, y) → converted to BlueStacks coords
-Result:   (State, Action) pair stored for training
-```
-
-### Step 3: Imitation Learning Training
-```python
-# behavior_cloning.py (TODO):
-Input:   Game State (screenshot features)
-Output:  Action (which_card, x, y)
-Loss:    MSE or Cross-Entropy vs human actions
-Result:  Pretrained policy network with saved weights
-```
-
-### Step 4: RL Fine-Tuning (The Key!)
-```python
-# rl_agent.py (TODO):
-# 1. Load pretrained weights from imitation learning
-policy_network.load_weights("imitation_model.pth")
-
-# 2. Fine-tune with RL
-while training:
-    state = env.observe()
-    action = policy_network.act(state)
-    reward = env.execute(action)
-    policy_network.update(state, action, reward)  # PPO/DQN/etc
-    
-# Result: Agent that plays better than humans!
-```
+| Phase | Label | Description |
+|-------|--------|-------------|
+| 0 | 🧱 Perception & State Extraction | Roboflow-based detectors for troops, towers, elixir, and cards in hand; mapping to structured features. |
+| 1 | 🎮 Data Collection | Capture frames, listen to keyboard/mouse, log (state, action) per frame into per-match CSVs. |
+| 2 | 🧹 Data Cleaning & Engineering | Merge input/output/validation, grid positions, fill missing values, add card availability flags. |
+| 3 | 💰 Rewards & RTG | Design reward function and compute returns-to-go for each frame (offline RL ready). |
+| 4 | 🧠 BC-LSTM | Train a multi-output LSTM to imitate human actions (card + placement). |
+| 5 | 🧾 Decision Transformer | Train an offline RL Decision Transformer on the same dataset with RTG conditioning. |
+| 6 | 🌀 PPO Warm Start | Wrap the game as an environment and fine-tune PPO using weights from the best offline policy. |
+| 7 | 📊 Evaluation | Compare BC-LSTM, Decision Transformer, and PPO (win rate, rewards, sample efficiency). |
 
 ---
 
-## ⚙️ Setup & Requirements
+## ⚙️ Setup & Requirements (Short)
 
-### Prerequisites
 - Python 3.8+
-- BlueStacks emulator (Android)
-- Roboflow account + API key
+- Windows + BlueStacks 4
+- Roboflow account & local/remote inference server
 
-### Dependencies (inferred from code)
-```bash
-pip install inference-sdk          # Roboflow inference
-pip install pynput                 # Input listeners
-pip install pywin32 pygetwindow    # Windows GUI
-pip install opencv-python          # CV utilities
-pip install onnxruntime torch      # Model inference
-pip install matplotlib numpy       # Utilities
-pip install mss                    # (Suggested) Screen capture
-pip install gymnasium              # (Suggested) RL environment
-pip install stable-baselines3      # (Suggested) RL algorithms
-```
+Main Python packages:
 
-### Configuration
-Update these paths in the respective files:
-```python
-# CardPredictor.py / StatePredictor.py
+pip install inference-sdk pynput pywin32 pygetwindow
+pip install mss numpy pandas
+pip install torch onnxruntime
+pip install gymnasium stable-baselines3
+
+Set your Roboflow config in StatePredictor.py and CardPredictor.py:
+
 API_URL = "http://localhost:9001"
 API_KEY = "your_api_key_here"
-```
-
----
-
-## 🎯 Roadmap
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1 | ✅ | Computer Vision pipeline for state extraction |
-| 2 | ✅ | Data collection setup (mouse/keyboard listeners) |
-| 3 | 🚧 | **Behavior Cloning** - Train model on human demonstrations |
-| 4 | ⏳ | **Export pretrained weights** for RL warm start |
-| 5 | ⏳ | **RL Fine-tuning** - Initialize with imitation weights and improve |
-| 6 | ⏳ | Evaluation and optimization |
-
----
-
-## 📌 Notes
-
-- 🧠 **Key Concept**: The RL agent starts with **pretrained weights** from imitation learning, not random weights!
-- The project uses **Roboflow Workflows** for inference - requires a local Roboflow server or API access
-- `Train.py` contains ONNX utilities that may need refactoring for Clash Royale
-- Coordinate conversion is calibrated for BlueStacks resolution **540x960**
-- ⚠️ `AdbControle.py` and `test.py` are **experimental** and not part of the main project pipeline
-
----
-
-*Made with ❤️ for a Second Year Computer Science Project*
+WORKSPACE = "your_workspace"
+WORKFLOW = "your_workflow_id"
