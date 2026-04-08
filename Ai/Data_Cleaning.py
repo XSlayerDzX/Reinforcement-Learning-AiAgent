@@ -187,7 +187,7 @@ def final_clean(input,output,val,match_id):
     df = drop_slot_columns(df)
     df.to_csv(f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv", index=False)
 
-for i in range(2,18):
+for i in range(2,19):
     input = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_input_{i}.csv"
     output = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_{i}.csv"
     val = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_action_validation_{i}.csv"
