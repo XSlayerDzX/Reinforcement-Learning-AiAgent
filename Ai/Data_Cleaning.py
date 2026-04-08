@@ -1,9 +1,8 @@
 import pandas as pd
 import numpy as np
 from ClashRoyalData import *
-from sympy import pretty_print
+from Create_DataSet import *
 
-set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\datasets\linked_dataset.csv"
 
 
 def link_frames(input_csv, output_csv,match_id):
@@ -151,15 +150,23 @@ def clean_output_with_groundtruth(
         .drop(columns=["orig_idx"])
         .reset_index(drop=True)
     )
-
     return out
 
-# output10 = pd.read_csv(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets\match_output_10.csv")
-# val10    = pd.read_csv(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets\match_output_action_validation_10.csv")
-#
-# clean10 = clean_output_with_groundtruth(output10, val10)
-#
-# clean10.to_csv("match_output_10_cleaned.csv", index=False)
+
+def distance_columns_cleaning(match_csv):
+    df = match_csv
+    for col in distance_columns:
+        df[col] = df[col].replace(10000000, -1)
+    print("distance columns cleaned")
+
+    return df
+
+def drop_slot_columns(input):
+    df = input
+    df.drop(columns=["slot_1", "slot_2", "slot_3", "slot_4"], inplace=True)
+    print("slot columns dropped")
+
+    return df
 
 def final_clean(input,output,val,match_id):
     input_df = pd.read_csv(input)
@@ -174,19 +181,21 @@ def final_clean(input,output,val,match_id):
     df = general_cleaning(df)
     df = clean_positions(df)
     df = card_avable(df)
+    df = distance_columns_cleaning(df)
+    df = drop_slot_columns(df)
+    df.to_csv(f"C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv", index=False)
 
-    df.to_csv(f"match_{match_id}_final_cleaned_dataset.csv", index=False)
+#input = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_input_18.csv"
+#output = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_18.csv"
+#val = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_action_validation_18.csv"
 
-input = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_input_18.csv"
-output = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_18.csv"
-val = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\uncleaned_match_data_sets\match_output_action_validation_18.csv"
+#final_clean(input,output,val,18)
 
-final_clean(input,output,val,18)
-
-
-
-
-
+for i in range(25,57):
+    input = f"C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/dataset_matchs/match_input_{i}.csv"
+    output = f"C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/dataset_matchs/match_output_{i}.csv"
+    val = f"C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/dataset_matchs/match_output_action_validation_{i}.csv"
+    final_clean(input,output,val,i)
 
 
 
