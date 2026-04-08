@@ -111,39 +111,6 @@ The rewarded, cleaned match CSVs are the base for both BC-LSTM and Decision Tran
 
 ---
 
-## 📦 Project Structure (Simplified)
-
-Reinforcement-Learning-AiAgent/
-|
-|-- Core CV & State
-|   |-- StatePredictor.py
-|   |-- CardPredictor.py
-|   |-- ClashRoyalData.py
-|   |-- State_Tracker.py
-|
-|-- Data Collection
-|   |-- Stream_to_frame.py
-|   |-- Event_listners.py
-|   |-- Create_DataSet.py
-|   |-- DataSet_Handler.py
-|
-|-- Data Cleaning & Rewards
-|   |-- Data_Cleaning.py
-|   |-- Reward_System.py
-|
-|-- BC-LSTM (notebooks / WIP)
-|   |-- BC_LSTM_Data.ipynb
-|   |-- BC_LSTM_Model.ipynb
-|   |-- BC_LSTM_Training.ipynb
-|   |-- BC_LSTM_Inference.ipynb
-|
-|-- Future RL Components (planned)
-    |-- DecisionTransformer_*.py
-    |-- PPO_Agent_*.py
-    |-- Env_Wrapper.py
-    |-- Evaluation_*.py
-
----
 
 ## 🗺️ Roadmap
 
