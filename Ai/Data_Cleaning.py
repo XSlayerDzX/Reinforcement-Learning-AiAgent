@@ -170,28 +170,31 @@ def drop_slot_columns(input):
 
     return df
 
-def final_clean(input,output,val,match_id):
+def final_clean(input,match_id,val= None,output = None):
     input_df = pd.read_csv(input)
-    output_uncleaned_df = pd.read_csv(output)
-    val_df = pd.read_csv(val)
+    output_uncleaned_df = pd.read_csv(output) if output else None
+    val_df = pd.read_csv(val) if val else None
 
-    output_df = clean_output_with_groundtruth(output_uncleaned_df, val_df)
+    output_df = clean_output_with_groundtruth(output_uncleaned_df, val_df) if val_df else output_uncleaned_df
 
-    df = link_frames(input_df,output_df,match_id)
-    df = output_cleaning(df)
+    df = link_frames(input_df,output_df,match_id) if output_df else pd.Dataframe(input_df)
+    df = output_cleaning(df) if output_df else df
     df = slot_cleaning(df)
     df = general_cleaning(df)
-    df = clean_positions(df)
+    df = clean_positions(df) if output_df else df
     df = card_avable(df)
     df = distance_columns_cleaning(df)
     df = drop_slot_columns(df)
-    df.to_csv(f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv", index=False)
+    df = df.to_csv(f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv", index=False) if val_df else (
+         df.to_csv(f"frame_{match_id}_agent.csv_")
+)
+    return df
 
-for i in range(2,19):
-    input = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_input_{i}.csv"
-    output = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_{i}.csv"
-    val = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_action_validation_{i}.csv"
-    final_clean(input,output,val,i)
+# for i in range(2,19):
+#     input = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_input_{i}.csv"
+#     output = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_{i}.csv"
+#     val = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_action_validation_{i}.csv"
+#     final_clean(input,output,val,i)
 
 
 
