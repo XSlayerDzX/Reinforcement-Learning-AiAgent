@@ -1,8 +1,8 @@
 #importthe screenshot module
 #-->
 #img_path = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
+from Ai import State_Tracker
 from Ai.Roboflow.StatePredictor import ExtractData
-import State_Tracker
 
 def ExtractSlots(Slots):
     slot1 = Slots.get("slot_1")  # None if missing

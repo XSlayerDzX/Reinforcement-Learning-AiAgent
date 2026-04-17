@@ -14,7 +14,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
 
     with mss.mss() as sct:
         # Find BlueStacks window handle by title
-        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 4")
+        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
 
         if not hwnd:
             # Fallback: partial search if the name changes

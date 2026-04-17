@@ -11,7 +11,7 @@ API_KEY = "obQog4mAaBRuPZZBIoti"
 
 WORKSPACE = "clashroyalbot-z9idj"
 WORKFLOW  = "detect-count-and-visualize"
-IMG_PATH  = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
+IMG_PATH  = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
