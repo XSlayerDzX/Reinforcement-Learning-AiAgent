@@ -71,13 +71,13 @@ def ExtractData(imgpath):
     except Exception as e:
         return None
 
-Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
-if __name__ == "__main__":
- print("Slots:", Slots)
- print("Troops:", Troops_ally)
- print("Troops:", Troops_enemy)
- print("Towers:", Towers)
- print("Elixir:", Elixir)
+# Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
+# if __name__ == "__main__":
+#  print("Slots:", Slots)
+#  print("Troops:", Troops_ally)
+#  print("Troops:", Troops_enemy)
+#  print("Towers:", Towers)
+#  print("Elixir:", Elixir)
 
 
 

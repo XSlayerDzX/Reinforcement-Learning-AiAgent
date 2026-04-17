@@ -30,7 +30,7 @@ def output_cleaning(match_csv):
     df["action"] = df["action"].fillna("wait")
     df["pos_x"] = df["pos_x"].fillna(-1)
     df["pos_y"] = df["pos_y"].fillna(-1)
-    print("output cleaned")
+    # print("output cleaned")
     return df
 
 def slot_cleaning(match_csv):
@@ -54,7 +54,7 @@ def general_cleaning(match_csv):
 
     df.fillna(-1, inplace=True)
 
-    print("general cleaning done")
+    # print("general cleaning done")
     return df
 
 ## whats needs to be added :
@@ -90,7 +90,7 @@ def clean_positions(match_csv):
     for col in pos_col:
         cleaned_col = (df[col] != -1)
         df.loc[cleaned_col, col] = df.loc[cleaned_col, col].apply(lambda px: pixel_to_grid_x(px) if col.endswith("_x") else pixel_to_grid_y(px))
-    print("cleaned positions done")
+    # print("cleaned positions done")
     return df
 
 def card_avable(match_csv):
@@ -108,7 +108,7 @@ def card_avable(match_csv):
         # Concatenate all new columns at once
         df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
-        print("card availability done")
+        # print("card availability done")
         return df
 
 
@@ -159,35 +159,40 @@ def distance_columns_cleaning(match_csv):
     df = match_csv
     for col in distance_columns:
         df[col] = df[col].replace(10000000, -1)
-    print("distance columns cleaned")
+    # print("distance columns cleaned")
 
     return df
 
 def drop_slot_columns(input):
     df = input
     df.drop(columns=["slot_1", "slot_2", "slot_3", "slot_4"], inplace=True)
-    print("slot columns dropped")
+    # print("slot columns dropped")
 
     return df
 
-def final_clean(input,match_id,val= None,output = None):
-    input_df = pd.read_csv(input)
+def final_clean(input,match_id= None,val= None,output = None):
+    input_df = pd.read_csv(input) if not isinstance(input, pd.DataFrame) else input.copy()
     output_uncleaned_df = pd.read_csv(output) if output else None
     val_df = pd.read_csv(val) if val else None
 
     output_df = clean_output_with_groundtruth(output_uncleaned_df, val_df) if val_df else output_uncleaned_df
 
-    df = link_frames(input_df,output_df,match_id) if output_df else pd.Dataframe(input_df)
-    df = output_cleaning(df) if output_df else df
+    df = link_frames(input_df,output_df,match_id) if output_df is not None else pd.DataFrame(input_df)
+    df = output_cleaning(df) if output_df is not None else df
     df = slot_cleaning(df)
     df = general_cleaning(df)
-    df = clean_positions(df) if output_df else df
+    df = clean_positions(df) if output_df is not None else df
     df = card_avable(df)
     df = distance_columns_cleaning(df)
     df = drop_slot_columns(df)
-    df = df.to_csv(f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv", index=False) if val_df else (
-         df.to_csv(f"frame_{match_id}_agent.csv_")
-)
+
+    # Optional export, but keep returning the cleaned DataFrame for downstream inference.
+    if val_df is not None and match_id is not None:
+        df.to_csv(
+            f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv",
+            index=False,
+        )
+    print("final cleaning done")
     return df
 
 # for i in range(2,19):
@@ -195,6 +200,8 @@ def final_clean(input,match_id,val= None,output = None):
 #     output = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_{i}.csv"
 #     val = f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/uncleaned_match_data_sets/match_output_action_validation_{i}.csv"
 #     final_clean(input,output,val,i)
+
+
 
 
 

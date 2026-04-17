@@ -5,14 +5,14 @@ import pandas as pd
 from Ai.State_Tracker import interrupt
 from Ai.Event_listners import *
 from Ai.Stream_to_frame import *
-from State_Tracker import *
+from Ai.State_Tracker import *
 
 id = 0
 match_id = 18
 mouse_listener , keyboard_listener = Start_Listeners()
 
 try:
-    while True:
+    while False:
 
         current_frame = Frame_Handler(count=id)
 
