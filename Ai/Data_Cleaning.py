@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from ClashRoyalData import *
-from Create_DataSet import *
+from Ai.ClashRoyalData import *
+from Ai.Create_DataSet import *
 
 
 
