@@ -22,6 +22,7 @@ import os
 import pyautogui as pya
 
 from Ai.Behavior_Cloning.lstm_inference_pipeline import LSTM_Inference_Pipeline
+from Ai.Behavior_Cloning.action_masking_config import get_masking_kwargs
 from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
@@ -37,6 +38,7 @@ models_dict = {
         output_size=13,
         hidden_size=128,
         num_layers=2,
+        **get_masking_kwargs(),
     )
 }
 
@@ -226,7 +228,7 @@ def Agent(model_name, state=True):
                         window_title="BlueStacks App Player 1",
                     )
 
-                    print("predicted action_id: {action_id}".format(action_id=action))
+                    print(f"predicted action_id: {ACTION_ID_TO_NAME[action]}")
                     print("predicted pos_pred: {pos_pred}".format(pos_pred=prediction["pos_pred"]))
 
                 elif model_name == "Transformer":
