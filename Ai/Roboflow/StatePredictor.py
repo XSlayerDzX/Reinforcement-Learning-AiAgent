@@ -1,9 +1,13 @@
+from time import sleep
+
 from inference_sdk import InferenceHTTPClient
 import base64
 from PIL import Image
 from io import BytesIO
 from Ai.ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
 from Ai import State_Tracker
+import cv2
+import numpy as np
 
 
 API_URL = "http://localhost:9001"
@@ -23,16 +27,30 @@ def predict(image_path):
     )
     return result
 
+# def Show_img(result):
+#     imgbase = result[0]['img output']
+#     img = base64.b64decode(imgbase)
+#     img = Image.open(BytesIO(img))
+#     img.show()
+
+# cv2.namedWindow("Detections", cv2.WINDOW_NORMAL)
 def Show_img(result):
     imgbase = result[0]['img output']
-    img = base64.b64decode(imgbase)
-    img = Image.open(BytesIO(img))
-    img.show()
+    img_bytes = base64.b64decode(imgbase)
 
+    pil_img = Image.open(BytesIO(img_bytes)).convert("RGB")
+    frame = np.array(pil_img)
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    small = cv2.resize(frame, None, fx=0.9, fy=0.9, interpolation=cv2.INTER_AREA)
+
+    cv2.imshow("Detections", small)
+    cv2.waitKey(1)
 
 def ExtractData(imgpath):
     result = predict(imgpath)
     #Show_img(result)
+    Show_img(result)
     result[0].pop('img output')
     Slots = {} # slot_1 = "archers",slot_2 = "archers"
     Troops_ally = {} # "knight" : (x,y), ally
@@ -78,6 +96,7 @@ def ExtractData(imgpath):
 #  print("Troops:", Troops_enemy)
 #  print("Towers:", Towers)
 #  print("Elixir:", Elixir)
+
 
 
 

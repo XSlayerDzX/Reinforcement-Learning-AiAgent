@@ -13,6 +13,7 @@
     # and click at that position ( masking for position grids is not done yet )
 from time import sleep
 
+import cv2
 import pandas as pd
 # Note : each frame information is saved into a csv for logging to be used later for training and improving the model
 # Note : we will implement the auto start match in this script as well
@@ -159,6 +160,7 @@ def react_agent(action_id, pos_x, pos_y, current_slots):
     pya.moveTo(pos_x, pos_y, duration=0.1)
     pya.click()
 
+
 def maybe_check_match_end(frame_path):
     checker_fn = globals().get("checker")
     if callable(checker_fn):
@@ -186,7 +188,7 @@ def Agent(model_name, state=True):
             return
 
         print("Model and bluestack ready")
-
+        #cv2.namedWindow("Detections", cv2.WINDOW_NORMAL) # should be disabled when not recording
         while state:
             current_frame = Frame_Handler(current_id)
             row_dict = Create_Dataset_Row(current_frame, current_id, current_match_id)
