@@ -62,8 +62,8 @@ def ExtractData(imgpath):
             if "slot_" in key:
                 if value["predictions"]:
                     card = value["predictions"][0]["class"]
-                    print(card)
                     n = key.split("_")[1]
+                    print(f"Slot {n}: {card}")
                     Slots.update({f"slot_{n}": card})
             elif key == "predictions":
                 if value["predictions"]:
@@ -88,14 +88,17 @@ def ExtractData(imgpath):
         return Slots, Troops_ally, Troops_enemy, Towers, elixir
     except Exception as e:
         return None
-
+# print("ye")
 # Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
+# print("done")
 # if __name__ == "__main__":
 #  print("Slots:", Slots)
 #  print("Troops:", Troops_ally)
 #  print("Troops:", Troops_enemy)
 #  print("Towers:", Towers)
 #  print("Elixir:", Elixir)
+
+
 
 
 

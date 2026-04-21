@@ -27,7 +27,7 @@ def ExtractElixir(Elixir):
 
 def ExtractCard(Troops, card_name):
     if card_name in Troops:
-        print(Troops[card_name])
+        #print(Troops[card_name])
         position= Troops[card_name][0]
         x, y = position
         return 1, (round(int(x),2)), round(int(y),2)
@@ -68,11 +68,11 @@ def Create_Dataset_Row(imgpath,id,match_id):
     try:
         data = ExtractData(imgpath)
         if data is None:
-            print("Data extraction failed.")
+            print("Data extraction failed. Either the game ended or hasent started yet")
             return None
 
         slots, troops_ally, troops_enemy, towers, elixir = ExtractData(imgpath)
-        print(slots)
+        #print(slots)
     except Exception as e:
         print(f"Error extracting data from image: {e}")
         return None
