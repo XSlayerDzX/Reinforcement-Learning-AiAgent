@@ -28,11 +28,16 @@ from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 import torch
+from pathlib import Path
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Construct the path relative to this file's location
+LSTM_MODEL_PATH = str(Path(__file__).parent.parent / "Behavior_Cloning" / "lstm.pth")
 
 models_dict = {
     "LSTM": LSTM_Inference_Pipeline(
-        model_path=r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\Behavior_Cloning\lstm.pth",
+        model_path=LSTM_MODEL_PATH,
         device=DEVICE,
         window_size=10,
         input_size=205,
@@ -56,10 +61,11 @@ Agent_State = {
 import json
 from pathlib import Path
 
-STATE_FILE = Path(r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\Agent\agent_global_state.json")
-LSTM_MATCHES_DIR = Path(r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\lstm_matches")
-ACTION_LOGS_DIR = Path(r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\lstm_matches\action_logs")
-
+# Use relative paths from the project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+STATE_FILE = PROJECT_ROOT / "Ai" / "Agent" / "agent_global_state.json"
+LSTM_MATCHES_DIR = PROJECT_ROOT / "Ai" / "lstm_matches"
+ACTION_LOGS_DIR = LSTM_MATCHES_DIR / "action_logs"
 
 DEFAULT_AGENT_GLOBAL_STATE = {
     "current_match_id": 0,
@@ -177,7 +183,7 @@ def Agent(model_name, state=True):
     match_actions_log = []
 
     try:
-        windows = pya.getWindowsWithTitle("BlueStacks App Player 1")
+        windows = pya.getWindowsWithTitle("BlueStacks App Player 4")
         if not windows or windows[0].isActive == False:
             print("Please open the BlueStacks window and start the game.")
             return
@@ -227,7 +233,7 @@ def Agent(model_name, state=True):
                         bs_x,
                         bs_y,
                         bluestacks_resolution=(540, 960),
-                        window_title="BlueStacks App Player 1", # this needs to be changed to the local name of ur bluestack
+                        window_title="BlueStacks App Player 4", # this needs to be changed to the local name of ur bluestack
                     )
 
                     print(f"predicted action_id: {ACTION_ID_TO_NAME[action]}")
@@ -255,7 +261,7 @@ def Agent(model_name, state=True):
                 react_agent(action, pos_x, pos_y, Agent_State["current_slots"])
                 current_id += 1
                 print("sleeping")
-                sleep(2)
+                sleep(1)
                 #print("sleeping ended going for next frame")
             else:
                 #call for the win/loss function to check if it was a win or loss
