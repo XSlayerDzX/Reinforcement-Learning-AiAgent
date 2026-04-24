@@ -16,8 +16,8 @@ def link_frames(input_csv, output_csv,match_id):
 
     # Merge the datasets on the 'id' column
     linked_df = pd.merge(input_csv, output_csv, on='id', how='left')
-    print(linked_df)
-    print(linked_df.shape)
+    #print(linked_df)
+    #print(linked_df.shape)
 
     # Save the linked dataset to a new CSV file
     return linked_df
@@ -192,7 +192,7 @@ def final_clean(input,match_id= None,val= None,output = None):
             f"C:/Users/SlayerDz/PycharmProjects/clash-royale-rl-agent/Ai/final_cleaned_dataset/match_{match_id}_final_cleaned_dataset.csv",
             index=False,
         )
-    print("final cleaning done")
+    #print("final cleaning done")
     return df
 
 # for i in range(2,19):

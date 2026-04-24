@@ -194,7 +194,7 @@ def Agent(model_name, state=True):
             row_dict = Create_Dataset_Row(current_frame, current_id, current_match_id)
 
             if row_dict:
-                print(f"valid frame_{current_id}")
+                #print(f"valid frame_{current_id}")
                 current_slots = {
                     "slot_1": row_dict["slot_1"],
                     "slot_2": row_dict["slot_2"],
@@ -216,7 +216,7 @@ def Agent(model_name, state=True):
                 pos_y = -1
 
                 if model_name == "LSTM":
-                    print("predicted using the lstm model")
+                    #print("predicted using the lstm model")
                     prediction = current_model.predict(row_df)
                     action = prediction["action_id"]
                     gx = prediction["pos_pred"][0]
@@ -227,7 +227,7 @@ def Agent(model_name, state=True):
                         bs_x,
                         bs_y,
                         bluestacks_resolution=(540, 960),
-                        window_title="BlueStacks App Player 1",
+                        window_title="BlueStacks App Player 1", # this needs to be changed to the local name of ur bluestack
                     )
 
                     print(f"predicted action_id: {ACTION_ID_TO_NAME[action]}")
@@ -256,7 +256,7 @@ def Agent(model_name, state=True):
                 current_id += 1
                 print("sleeping")
                 sleep(2)
-                print("sleeping ended going for next frame")
+                #print("sleeping ended going for next frame")
             else:
                 #call for the win/loss function to check if it was a win or loss
                 # check = maybe_check_match_end(current_frame)
