@@ -21,8 +21,8 @@ def check_match_status(path):
     roi_winner = frame_array[y1_win:y2_win,   x1:x2]
     roi_loser  = frame_array[y1_loss:y2_loss, x1:x2]
 
-    cv2.imwrite("debug_roi_winner.png", roi_winner)
-    cv2.imwrite("debug_roi_loser.png",  roi_loser)
+    cv2.imwrite("image_process/debug_roi_winner.png", roi_winner)
+    cv2.imwrite("image_process/debug_roi_loser.png", roi_loser)
 
 
 
