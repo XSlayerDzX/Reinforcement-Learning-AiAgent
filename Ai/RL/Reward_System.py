@@ -42,4 +42,39 @@ def compute_reward(match_data_set):
     return df
 
 
+def compute_step_reward(current_frame, next_frame):
+    reward = 0.0
+
+    # Identify lists of entities based on the keys
+    enemy_troops = [col for col in current_frame.keys() if str(col).endswith("_enemy")]
+    ally_towers = ["ally_prince_tower_left", "ally_prince_tower_right", "ally_king_tower"]
+    enemy_towers = ["enemy_prince_tower_left", "enemy_prince_tower_right", "enemy_king_tower"]
+
+    # 1. Killed and Unkilled Enemy Troops
+    for troop in enemy_troops:
+        curr_val = current_frame.get(troop, 0)
+        next_val = next_frame.get(troop, 0)
+
+        if curr_val == 1 and next_val == 0:
+            reward += 0.15
+        elif curr_val == 1 and next_val == 1:
+            reward -= 0.01
+
+    # 2. Destroyed Ally Towers
+    for tower in ally_towers:
+        if current_frame.get(tower, 0) == 1 and next_frame.get(tower, 0) == 0:
+            reward -= 0.4
+
+    # 3. Destroyed Enemy Towers
+    for tower in enemy_towers:
+        if current_frame.get(tower, 0) == 1 and next_frame.get(tower, 0) == 0:
+            reward += 0.75
+
+    #4 slight negative reward for each step to encourage shorter games
+    reward -= 0.01
+    # tayeb task: checking for who won based on pixels would go here
+
+    return reward
+
+
 
