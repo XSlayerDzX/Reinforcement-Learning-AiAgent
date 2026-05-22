@@ -2,6 +2,8 @@ from time import sleep
 
 import pyautogui as pya
 import pandas as pd
+from debugpy.common.timestamp import current
+
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Agent.Agent_main import react_agent,ACTION_ID_TO_NAME,get_slot_for_action
@@ -13,12 +15,12 @@ from Reward_System import compute_step_reward
 
 
 def Observation(id=0, match_id=0):
-    currnet_frame = Frame_Handler()
+    current_frame = Frame_Handler()
     current_slots = {}
-    if currnet_frame is None:
+    if current_frame is None:
         return None
     # Process the frame to extract game state information
-    row_dict = Create_Dataset_Row(currnet_frame, id, match_id)  # Example IDs
+    row_dict = Create_Dataset_Row(current_frame, id, match_id)  # Example IDs
     if row_dict:
         current_slots = {
             "slot_1": row_dict["slot_1"],
@@ -88,6 +90,8 @@ class ClashRoyalEnv:
         self.prev_obs = self.obs.copy()
 
         return self.obs, reward, self.done
+
+
 
 
 
