@@ -15,7 +15,7 @@ API_KEY = "obQog4mAaBRuPZZBIoti"
 
 WORKSPACE = "clashroyalbot-z9idj"
 WORKFLOW  = "detect-count-and-visualize"
-IMG_PATH  = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
+IMG_PATH  = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
@@ -88,15 +88,15 @@ def ExtractData(imgpath):
         return Slots, Troops_ally, Troops_enemy, Towers, elixir
     except Exception as e:
         return None
-print("ye")
-Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
-print("done")
-if __name__ == "__main__":
- print("Slots:", Slots)
- print("Troops:", Troops_ally)
- print("Troops:", Troops_enemy)
- print("Towers:", Towers)
- print("Elixir:", Elixir)
+# print("ye")
+# Slots, Troops_ally, Troops_enemy, Towers, Elixir = ExtractData(imgpath=IMG_PATH)
+# print("done")
+# if __name__ == "__main__":
+#  print("Slots:", Slots)
+#  print("Troops:", Troops_ally)
+#  print("Troops:", Troops_enemy)
+#  print("Towers:", Towers)
+#  print("Elixir:", Elixir)
 
 
 

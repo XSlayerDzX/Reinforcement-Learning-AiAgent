@@ -48,7 +48,7 @@ finally:
     df_input = pd.DataFrame(match_dict_input["data"])
     df_output = pd.DataFrame(match_dict_output["data"])
 
-    save_dir = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\uncleaned_match_data_sets"
+    save_dir = r"/Ai/final_cleaned_dataset/uncleaned_match_data_sets"
 
     os.makedirs(save_dir, exist_ok=True)
 

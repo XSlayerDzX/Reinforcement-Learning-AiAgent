@@ -31,9 +31,12 @@ from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.check_status import check_match_status
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Construct the path relative to this file's location
+LSTM_MODEL_PATH = str(Path(__file__).parent.parent / "Behavior_Cloning" / "lstm.pth")
+
 models_dict = {
     "LSTM": LSTM_Inference_Pipeline(
-        model_path=r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\Behavior_Cloning\lstm.pth",
+        model_path=LSTM_MODEL_PATH,
         device=DEVICE,
         window_size=10,
         input_size=205,
@@ -57,10 +60,11 @@ Agent_State = {
 import json
 from pathlib import Path
 
-STATE_FILE = Path(r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\Agent\agent_global_state.json")
-LSTM_MATCHES_DIR = Path(r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\lstm_matches")
-ACTION_LOGS_DIR = Path(r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\lstm_matches\action_logs")
-
+# Use relative paths from the project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+STATE_FILE = PROJECT_ROOT / "Ai" / "Agent" / "agent_global_state.json"
+LSTM_MATCHES_DIR = PROJECT_ROOT / "Ai" / "lstm_matches"
+ACTION_LOGS_DIR = LSTM_MATCHES_DIR / "action_logs"
 
 DEFAULT_AGENT_GLOBAL_STATE = {
     "current_match_id": 0,
@@ -272,6 +276,7 @@ def Agent(model_name, state=True):
     try:
 
         current_model = validate_environment(model_name, models_dict)
+        
         print("validate_environment returned:", current_model)
         print("requested model key:", model_name)
         print("available model keys:", list(models_dict.keys()))
@@ -307,8 +312,9 @@ def Agent(model_name, state=True):
 
                 react_agent(action, pos_x, pos_y, Agent_State["current_slots"])
                 current_id += 1
-               # print("sleeping")
-                sleep(2)
+                
+                print("sleeping")
+                sleep(1)
                 #print("sleeping ended going for next frame")
             else:
                 # new add : check for match end and update global state accordingly to avoid getting stuck in an infinite loop when the match ends and no more valid frames are captured
