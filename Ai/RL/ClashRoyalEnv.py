@@ -8,6 +8,7 @@ from Ai.Stream_to_frame import Frame_Handler
 from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Agent.Agent_main import react_agent,ACTION_ID_TO_NAME,get_slot_for_action
 from Reward_System import compute_step_reward
+from Ai.check_status import check_match_status
 
 
 
@@ -30,7 +31,12 @@ def Observation(id=0, match_id=0):
         }
         return row_dict , current_slots
     else:
-        return None
+        #check if the match is done
+        state = check_match_status(current_frame)
+        if state == "win" or state == "loss":
+            return state, None
+        else:
+            return None, None
 
 
 class ClashRoyalEnv:
@@ -43,6 +49,7 @@ class ClashRoyalEnv:
         self.current_step = 0
         self.done = False
         self.prev_obs = None
+        self.next_obs = None
         self.obs = None
         self.current_slots = {}
 
@@ -56,13 +63,13 @@ class ClashRoyalEnv:
         self.current_step = 0
         self.done = False
         self.prev_obs = None
+        self.next_obs = None
         self.current_slots = {}
         # Reset the game state here (e.g., start a new match)
-        while not self.obs is None: ## wait until the game state is ready
+        while self.obs is None: ## wait until the game state is ready
             self.obs, self.current_slots = Observation(self.current_step)
             sleep(0.5) ## wait for the game to update
         self.obs = pd.DataFrame([self.obs])
-        self.prev_obs = self.obs.copy()
         return self.obs
 
 
@@ -72,24 +79,33 @@ class ClashRoyalEnv:
 
         # Execute the action (e.g., simulate a tap or card placement)
         react_agent(action,pos_x,pos_y,current_slots=self.current_slots)
+        self.prev_obs = self.obs.copy() if self.obs is not None else None
 
         # Wait for the game state to update
         pya.sleep(self.step_delay)
 
         # Get the new observation
         self.current_step += 1
-        self.obs, self.current_slots = Observation(self.current_step) ## Get new observation and current slots after action
+        self.obs, self.current_slots = Observation(self.current_step)  ## Get the new observation and current slots after executing the action, this function will return None if the game state is not ready yet, so we need to wait until it returns a valid observation
+        while self.obs is None: ## wait until the game state is ready or until the check function for win or loss can be applied
+            self.obs, self.current_slots = Observation(self.current_step) ## Get the new observation and current slots after executing the action
+            sleep(0.5)
+        if self.obs == "win":
+            reward = self.reward_win
+            self.done = True
+            return self.obs, reward, self.done
+        elif self.obs == "loss":
+            reward = self.reward_lose
+            self.done = True
+            return self.obs, reward, self.done
         self.obs = pd.DataFrame([self.obs]) ## Convert to DataFrame for easier processing
         # Calculate reward based on the new observation and previous observation
         reward = compute_step_reward(self.prev_obs.iloc[0], self.obs.iloc[0])
 
-        # Check if the episode is done (e.g., match ended)
-        #self.done = self.check_done(self.obs)
-
         # Update previous observation
-        self.prev_obs = self.obs.copy()
+        self.next_obs = self.obs.copy()
 
-        return self.obs, reward, self.done
+        return self.next_obs, self.prev_obs,reward, self.done
 
 
 

@@ -32,7 +32,7 @@ class PPO_LSTM_Model(nn.Module):
             self.warm_start(pretrained_model_path)
 
     def forward(self, x):
-        lstm_out, (h_n, c_n) = self.lstm(x)  # [B, T, H]
+        lstm_out, _ = self.lstm(x)  # [B, T, H]
         last = lstm_out[:, -1, :]
         last_transformed = self.shared(last)
 

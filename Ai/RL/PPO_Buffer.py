@@ -39,7 +39,6 @@ class PPOBuffer:
 
 
 
-
     def compute_returns_to_go_and_advantages(self, gamma=0.99, lam=0.95): ## Compute returns-to-go and advantages for the transitions in the buffer, using Monte Carlo returns and a simple advantage calculation (can be improved with GAE)
         self.returns_to_go = []
         self.advantages = []
@@ -64,5 +63,7 @@ class PPOBuffer:
             return None
         self.minibatch = random.sample(self.buffer, self.mini_batch_size)
         return self.minibatch
+    ## the sample function would be changed according to the way we want to sample the data for training, for example,
+    ## we can sample sequentially or randomly, and we can also include the LSTM states in the sampling process if needed.
 
 

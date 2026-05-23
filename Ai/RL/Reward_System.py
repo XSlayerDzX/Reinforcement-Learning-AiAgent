@@ -73,6 +73,7 @@ def compute_step_reward(current_frame, next_frame):
     #4 slight negative reward for each step to encourage shorter games
     reward -= 0.01
     # tayeb task: checking for who won based on pixels would go here
+    ## This would require additional logic to analyze the pixel data and determine the winner, which is not implemented in this function.
 
     return reward
 
