@@ -5,30 +5,26 @@
 # step 3 : clean and transform the output of the cv model to be ready for the lstm model
 # step 4 : have a buffer that stores frames and padd with zeros if the buffer is not full
 # step 5 : input that buffer window into the lstm to get a prediction of action,pos x and y
-# step 6 : here the agent is going to start doing its work : ------> {
-    # if action predicted is "wait" then the agent wont do anything and skips
-    # if action is anything else then "wait" then the agent will first get the slot of that action card
-    # then the agent will translate the grid of x and y into pure pixel coordinates
-    # then excutes pyautogui to press the slot number in the keyboard and move the mouse to the mouse coordinates
-    # and click at that position ( masking for position grids is not done yet )
+# step 6 : here the agent is going to start doing its work
+
 from time import sleep
+import json
+import os
+from pathlib import Path
 
 import pandas as pd
-# Note : each frame information is saved into a csv for logging to be used later for training and improving the model
-# Note : we will implement the auto start match in this script as well
-
-#importing
-import os
+import torch
 import pyautogui as pya
 import shutil
-import torch
+import pygetwindow as pgw
 
 from Ai.Behavior_Cloning.lstm_inference_pipeline import LSTM_Inference_Pipeline
 from Ai.Behavior_Cloning.action_masking_config import get_masking_kwargs
-from Ai.CreatClean_dataset.Create_DataSet import Create_Dataset_Row
-from Ai.image_process.Stream_to_frame import Frame_Handler
+from Ai.Create_DataSet import Create_Dataset_Row
+from Ai.Stream_to_frame import Frame_Handler
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.check_status import check_match_status
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Construct the path relative to this file's location
@@ -48,17 +44,14 @@ models_dict = {
 }
 
 Agent_State = {
-    "current_frame" : "",
-    "current_card" : "",
-    "current_elixir" : "",
-    "current_id" : 0,
-    "current_match_id" : "",
-    "current_towers" : {},
+    "current_frame": "",
+    "current_card": "",
+    "current_elixir": "",
+    "current_id": 0,
+    "current_match_id": "",
+    "current_towers": {},
     "current_slots": {},
 }
-
-import json
-from pathlib import Path
 
 # Use relative paths from the project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -76,9 +69,9 @@ DEFAULT_AGENT_GLOBAL_STATE = {
 def _to_json_safe_dict(row_dict):
     safe = {}
     for key, value in row_dict.items():
-        # Convert numpy/pandas scalars to native Python types for JSON serialization.
         safe[key] = value.item() if hasattr(value, "item") else value
     return safe
+
 
 def load_agent_global_state():
     if not STATE_FILE.exists():
@@ -87,7 +80,6 @@ def load_agent_global_state():
     try:
         with STATE_FILE.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        # Ensure expected keys exist
         if "current_match_id" not in data:
             data["current_match_id"] = 0
         if "match_id_state" not in data or not isinstance(data["match_id_state"], dict):
@@ -99,25 +91,20 @@ def load_agent_global_state():
         print(f"Failed to load state file {STATE_FILE}: {e}")
         return DEFAULT_AGENT_GLOBAL_STATE.copy()
 
+
 def save_agent_global_state(state):
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-
         temp_file = STATE_FILE.with_suffix(".tmp")
         with temp_file.open("w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
-
-        # Atomic replace on same filesystem
         os.replace(temp_file, STATE_FILE)
     except Exception as e:
         print(f"Failed to save state file {STATE_FILE}: {e}")
 
 
-# Load persisted state once at module import time
 Agent_global_state = load_agent_global_state()
-
 match_csv = {}
-
 
 ACTION_ID_TO_NAME = {
     0: "wait",
@@ -134,34 +121,30 @@ ACTION_ID_TO_NAME = {
     11: "goblin cage",
 }
 
+
 def get_slot_for_action(action_name, current_slots):
     for slot_key, card_name in current_slots.items():
         if card_name == action_name:
             return slot_key
     return None
 
+
 def react_agent(action_id, pos_x, pos_y, current_slots):
-    # 1) wait
     if action_id == 0:
-        "returning actions is wait"
         return
 
-    #convert action id to card name
     action_name = ACTION_ID_TO_NAME.get(action_id)
     if action_name is None:
         print(f"Unknown action_id: {action_id}")
         return
 
-    #find the slot that contains that card
     slot_key = get_slot_for_action(action_name, current_slots)
     if slot_key is None:
         print(f"Card '{action_name}' not found in current slots: {current_slots}")
         return
 
     slot_number = slot_key.split("_")[-1]
-
     pya.press(slot_number)
-
     pya.moveTo(pos_x, pos_y, duration=0.1)
     pya.click()
 
@@ -172,10 +155,10 @@ def maybe_check_match_end(frame_path):
         return checker_fn(frame_path)
     return None
 
-# this function check if the bluestacks and the model are ready
+
 def validate_environment(model_name, models_dict):
     """Checks if BlueStacks is active and the requested model exists."""
-    windows = pya.getWindowsWithTitle("BlueStacks App Player 2")
+    windows = pgw.getWindowsWithTitle("BlueStacks App Player 4")
     if not windows or not windows[0].isActive:
         print("Please open the BlueStacks window and start the game.")
         return None
@@ -186,10 +169,9 @@ def validate_environment(model_name, models_dict):
         return None
 
     print("Model and bluestack ready")
-
     return current_model
 
-# this function will handle the inference and coordinate translation based on the model type
+
 def get_model_prediction(model_name, current_model, row_dict):
     """Handles inference and coordinate translation based on the model type."""
     action = 0
@@ -204,28 +186,22 @@ def get_model_prediction(model_name, current_model, row_dict):
 
         bs_x, bs_y = grid_to_pixel(gx, gy)
         pos_x, pos_y = bluestacks_to_global_coords(
-            bs_x, bs_y, bluestacks_resolution=(540, 960), window_title="BlueStacks App Player 2"
+            bs_x, bs_y, bluestacks_resolution=(540, 960), window_title="BlueStacks App Player 4"
         )
         print(f"predicted action_id: {ACTION_ID_TO_NAME.get(action, 'unknown')}")
         print(f"predicted pos_pred: {prediction['pos_pred']}")
 
     elif model_name == "Transformer" or model_name == "PPO":
-        pass # Implement future models here
+        pass
 
     if action == 0:
         pos_x, pos_y = -1, -1
 
     return action, pos_x, pos_y
 
-"""
-this function will handle : 
- - saving the match data and the actions log into csv files 
- - update the global state of the agent with the match result 
- - clear the temp_screens folder 
-"""
-def save_match_data(current_match_id, match_csv, match_actions_log, global_state , win_status):
-    # 1 Save Match CSV
 
+def save_match_data(current_match_id, match_csv, match_actions_log, global_state, win_status):
+    """Save match data and actions log to CSV files."""
     try:
         if match_csv:
             match_df = pd.DataFrame.from_dict(match_csv, orient="index")
@@ -235,7 +211,6 @@ def save_match_data(current_match_id, match_csv, match_actions_log, global_state
     except Exception as e:
         print(f"Failed to save match CSV: {e}")
 
-    # 2 Save Actions Log
     try:
         if match_actions_log:
             ACTION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -244,7 +219,6 @@ def save_match_data(current_match_id, match_csv, match_actions_log, global_state
     except Exception as e:
         print(f"Failed to save actions log CSV: {e}")
 
-    # 3 Update Global State and clear temps
     try:
         if match_csv:
             match_id_key = str(current_match_id)
@@ -254,15 +228,16 @@ def save_match_data(current_match_id, match_csv, match_actions_log, global_state
             save_agent_global_state(global_state)
             print("Match data saved in json file")
 
-            chemin = r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\Agent\temp_screens"
-            if os.path.exists(chemin):
-                shutil.rmtree(chemin)
-                os.makedirs(chemin)
+            path = PROJECT_ROOT / "Ai" / "Agent" / "temp_screens"
+            if os.path.exists(path):
+                shutil.rmtree(path)
+                os.makedirs(path)
                 print("temp_screens folder cleared and recreated")
         else:
             print("Skipping global state save: no frame rows were captured.")
     except Exception as e:
         print(f"Failed to save agent global state: {e}")
+
 
 def Agent(model_name, state=True):
     current_match_id = Agent_global_state["current_match_id"]
@@ -274,20 +249,17 @@ def Agent(model_name, state=True):
     match_actions_log = []
 
     try:
-
         current_model = validate_environment(model_name, models_dict)
-        
+
         print("validate_environment returned:", current_model)
         print("requested model key:", model_name)
         print("available model keys:", list(models_dict.keys()))
 
-        #cv2.namedWindow("Detections", cv2.WINDOW_NORMAL) # should be disabled when not recording
         while state:
             current_frame = Frame_Handler(current_id)
             row_dict = Create_Dataset_Row(current_frame, current_id, current_match_id)
 
             if row_dict:
-                #print(f"valid frame_{current_id}")
                 current_slots = {f"slot_{i}": row_dict[f"slot_{i}"] for i in range(1, 5)}
                 Agent_State.update({
                     "current_slots": current_slots,
@@ -300,24 +272,20 @@ def Agent(model_name, state=True):
 
                 action, pos_x, pos_y = get_model_prediction(model_name, current_model, row_dict)
 
-                match_actions_log.append(
-                    {
-                        "id": current_id,
-                        "action_id": int(action),
-                        "action_name": ACTION_ID_TO_NAME.get(action, "unknown"),
-                        "pos_x": int(pos_x),
-                        "pos_y": int(pos_y),
-                    }
-                )
+                match_actions_log.append({
+                    "id": current_id,
+                    "action_id": int(action),
+                    "action_name": ACTION_ID_TO_NAME.get(action, "unknown"),
+                    "pos_x": int(pos_x),
+                    "pos_y": int(pos_y),
+                })
 
                 react_agent(action, pos_x, pos_y, Agent_State["current_slots"])
                 current_id += 1
-                
+
                 print("sleeping")
                 sleep(1)
-                #print("sleeping ended going for next frame")
             else:
-                # new add : check for match end and update global state accordingly to avoid getting stuck in an infinite loop when the match ends and no more valid frames are captured
                 check = check_match_status(current_frame)
                 if check == "win" or check == "loss":
                     state = False
@@ -340,12 +308,15 @@ def Agent(model_name, state=True):
 
     except Exception as e:
         print(f"Agent crashed with error: {e}")
+        should_save_global_state = True
 
     finally:
-        save_match_data(current_match_id, match_csv, match_actions_log, Agent_global_state, Agent_global_state["match_id_state"].get(str(current_match_id), "unknown"))
+        save_match_data(current_match_id, match_csv, match_actions_log, Agent_global_state,
+                       Agent_global_state["match_id_state"].get(str(current_match_id), "unknown"))
         if should_save_global_state:
             save_agent_global_state(Agent_global_state)
 
+
 if __name__ == "__main__":
- Agent(model_name="LSTM",state=True)
+    Agent(model_name="LSTM", state=True)
 
