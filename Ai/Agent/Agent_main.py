@@ -13,7 +13,6 @@
     # and click at that position ( masking for position grids is not done yet )
 from time import sleep
 
-import cv2
 import pandas as pd
 # Note : each frame information is saved into a csv for logging to be used later for training and improving the model
 # Note : we will implement the auto start match in this script as well
@@ -21,15 +20,15 @@ import pandas as pd
 #importing
 import os
 import pyautogui as pya
+import shutil
+import torch
 
 from Ai.Behavior_Cloning.lstm_inference_pipeline import LSTM_Inference_Pipeline
 from Ai.Behavior_Cloning.action_masking_config import get_masking_kwargs
-from Ai.Create_DataSet import Create_Dataset_Row
-from Ai.Stream_to_frame import Frame_Handler
+from Ai.CreatClean_dataset.Create_DataSet import Create_Dataset_Row
+from Ai.image_process.Stream_to_frame import Frame_Handler
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
-import torch
-from pathlib import Path
-
+from Ai.check_status import check_match_status
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Construct the path relative to this file's location
@@ -52,7 +51,7 @@ Agent_State = {
     "current_frame" : "",
     "current_card" : "",
     "current_elixir" : "",
-    "current_id" : "",
+    "current_id" : 0,
     "current_match_id" : "",
     "current_towers" : {},
     "current_slots": {},
@@ -173,6 +172,98 @@ def maybe_check_match_end(frame_path):
         return checker_fn(frame_path)
     return None
 
+# this function check if the bluestacks and the model are ready
+def validate_environment(model_name, models_dict):
+    """Checks if BlueStacks is active and the requested model exists."""
+    windows = pya.getWindowsWithTitle("BlueStacks App Player 2")
+    if not windows or not windows[0].isActive:
+        print("Please open the BlueStacks window and start the game.")
+        return None
+
+    current_model = models_dict.get(model_name)
+    if current_model is None:
+        print(f"Unknown model key: {model_name}")
+        return None
+
+    print("Model and bluestack ready")
+
+    return current_model
+
+# this function will handle the inference and coordinate translation based on the model type
+def get_model_prediction(model_name, current_model, row_dict):
+    """Handles inference and coordinate translation based on the model type."""
+    action = 0
+    pos_x, pos_y = -1, -1
+
+    if model_name == "LSTM":
+        row_df = pd.DataFrame([row_dict])
+        prediction = current_model.predict(row_df)
+        action = prediction["action_id"]
+        gx = prediction["pos_pred"][0]
+        gy = prediction["pos_pred"][1]
+
+        bs_x, bs_y = grid_to_pixel(gx, gy)
+        pos_x, pos_y = bluestacks_to_global_coords(
+            bs_x, bs_y, bluestacks_resolution=(540, 960), window_title="BlueStacks App Player 2"
+        )
+        print(f"predicted action_id: {ACTION_ID_TO_NAME.get(action, 'unknown')}")
+        print(f"predicted pos_pred: {prediction['pos_pred']}")
+
+    elif model_name == "Transformer" or model_name == "PPO":
+        pass # Implement future models here
+
+    if action == 0:
+        pos_x, pos_y = -1, -1
+
+    return action, pos_x, pos_y
+
+"""
+this function will handle : 
+ - saving the match data and the actions log into csv files 
+ - update the global state of the agent with the match result 
+ - clear the temp_screens folder 
+"""
+def save_match_data(current_match_id, match_csv, match_actions_log, global_state , win_status):
+    # 1 Save Match CSV
+
+    try:
+        if match_csv:
+            match_df = pd.DataFrame.from_dict(match_csv, orient="index")
+            match_df.index.name = "id"
+            LSTM_MATCHES_DIR.mkdir(parents=True, exist_ok=True)
+            match_df.to_csv(LSTM_MATCHES_DIR / f"match_{current_match_id}.csv")
+    except Exception as e:
+        print(f"Failed to save match CSV: {e}")
+
+    # 2 Save Actions Log
+    try:
+        if match_actions_log:
+            ACTION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            actions_df = pd.DataFrame(match_actions_log)
+            actions_df.to_csv(ACTION_LOGS_DIR / f"match_{current_match_id}_actions.csv", index=False)
+    except Exception as e:
+        print(f"Failed to save actions log CSV: {e}")
+
+    # 3 Update Global State and clear temps
+    try:
+        if match_csv:
+            match_id_key = str(current_match_id)
+            global_state.setdefault("match_id_state", {})
+            global_state["match_id_state"][match_id_key] = win_status
+            global_state["current_match_id"] = current_match_id + 1
+            save_agent_global_state(global_state)
+            print("Match data saved in json file")
+
+            chemin = r"C:\Users\SK-TECH\PycharmProjects\clash-royale-rl-agent\Ai\Agent\temp_screens"
+            if os.path.exists(chemin):
+                shutil.rmtree(chemin)
+                os.makedirs(chemin)
+                print("temp_screens folder cleared and recreated")
+        else:
+            print("Skipping global state save: no frame rows were captured.")
+    except Exception as e:
+        print(f"Failed to save agent global state: {e}")
+
 def Agent(model_name, state=True):
     current_match_id = Agent_global_state["current_match_id"]
     current_id = 0
@@ -183,17 +274,13 @@ def Agent(model_name, state=True):
     match_actions_log = []
 
     try:
-        windows = pya.getWindowsWithTitle("BlueStacks App Player 4")
-        if not windows or windows[0].isActive == False:
-            print("Please open the BlueStacks window and start the game.")
-            return
 
-        current_model = models_dict.get(model_name)
-        if current_model is None:
-            print(f"Unknown model key: {model_name}")
-            return
+        current_model = validate_environment(model_name, models_dict)
+        
+        print("validate_environment returned:", current_model)
+        print("requested model key:", model_name)
+        print("available model keys:", list(models_dict.keys()))
 
-        print("Model and bluestack ready")
         #cv2.namedWindow("Detections", cv2.WINDOW_NORMAL) # should be disabled when not recording
         while state:
             current_frame = Frame_Handler(current_id)
@@ -201,52 +288,17 @@ def Agent(model_name, state=True):
 
             if row_dict:
                 #print(f"valid frame_{current_id}")
-                current_slots = {
-                    "slot_1": row_dict["slot_1"],
-                    "slot_2": row_dict["slot_2"],
-                    "slot_3": row_dict["slot_3"],
-                    "slot_4": row_dict["slot_4"],
-                }
+                current_slots = {f"slot_{i}": row_dict[f"slot_{i}"] for i in range(1, 5)}
+                Agent_State.update({
+                    "current_slots": current_slots,
+                    "current_frame": current_frame,
+                    "current_id": current_id,
+                    "current_elixir": row_dict["Elixir"]
+                })
 
-                current_elixir = row_dict["Elixir"]
-                Agent_State["current_slots"] = current_slots
-                Agent_State["current_frame"] = current_frame
-                Agent_State["current_id"] = current_id
-                Agent_State["current_elixir"] = current_elixir
-
-                row_df = pd.DataFrame([row_dict])  # one-row DataFrame
                 match_csv[str(current_id)] = _to_json_safe_dict(row_dict)
 
-                action = 0
-                pos_x = -1
-                pos_y = -1
-
-                if model_name == "LSTM":
-                    #print("predicted using the lstm model")
-                    prediction = current_model.predict(row_df)
-                    action = prediction["action_id"]
-                    gx = prediction["pos_pred"][0]
-                    gy = prediction["pos_pred"][1]
-
-                    bs_x, bs_y = grid_to_pixel(gx, gy)
-                    pos_x, pos_y = bluestacks_to_global_coords(
-                        bs_x,
-                        bs_y,
-                        bluestacks_resolution=(540, 960),
-                        window_title="BlueStacks App Player 4", # this needs to be changed to the local name of ur bluestack
-                    )
-
-                    print(f"predicted action_id: {ACTION_ID_TO_NAME[action]}")
-                    print("predicted pos_pred: {pos_pred}".format(pos_pred=prediction["pos_pred"]))
-
-                elif model_name == "Transformer":
-                    pass
-                elif model_name == "PPO":
-                    pass
-
-                if action == 0:
-                    pos_x = -1
-                    pos_y = -1
+                action, pos_x, pos_y = get_model_prediction(model_name, current_model, row_dict)
 
                 match_actions_log.append(
                     {
@@ -260,19 +312,21 @@ def Agent(model_name, state=True):
 
                 react_agent(action, pos_x, pos_y, Agent_State["current_slots"])
                 current_id += 1
+                
                 print("sleeping")
                 sleep(1)
                 #print("sleeping ended going for next frame")
             else:
-                #call for the win/loss function to check if it was a win or loss
-                # check = maybe_check_match_end(current_frame)
-                # if check == "win" or check == "loss" or check is True:
-                #     state = False
-                #     status = check if isinstance(check, str) else "ended"
-                #     print(f"Match {current_match_id} ended with a {status}.")
-                #     Agent_global_state["match_id_state"][current_match_id] = status
-                #     should_save_global_state = True
-                #     break
+                # new add : check for match end and update global state accordingly to avoid getting stuck in an infinite loop when the match ends and no more valid frames are captured
+                check = check_match_status(current_frame)
+                if check == "win" or check == "loss":
+                    state = False
+                    print(f"Match {current_match_id} ended with a {check}.")
+                    Agent_global_state["match_id_state"][str(current_match_id)] = check
+                    should_save_global_state = True
+                    break
+                elif check == "ongoing":
+                    continue
 
                 print(f"Failed to capture a valid frame {current_id}. Skipping.")
                 if current_frame and os.path.exists(current_frame):
@@ -288,38 +342,10 @@ def Agent(model_name, state=True):
         print(f"Agent crashed with error: {e}")
 
     finally:
-        # Persist frame log safely
-        try:
-            if match_csv:
-                match_df = pd.DataFrame.from_dict(match_csv, orient="index")
-                match_df.index.name = "id"
-                LSTM_MATCHES_DIR.mkdir(parents=True, exist_ok=True)
-                match_df.to_csv(LSTM_MATCHES_DIR / f"match_{current_match_id}.csv")
-        except Exception as e:
-            print(f"Failed to save match CSV: {e}")
+        save_match_data(current_match_id, match_csv, match_actions_log, Agent_global_state, Agent_global_state["match_id_state"].get(str(current_match_id), "unknown"))
+        if should_save_global_state:
+            save_agent_global_state(Agent_global_state)
 
-        # Persist executed actions in a separate per-match file.
-        try:
-            if match_actions_log:
-                ACTION_LOGS_DIR.mkdir(parents=True, exist_ok=True)
-                actions_df = pd.DataFrame(match_actions_log)
-                actions_df.to_csv(ACTION_LOGS_DIR / f"match_{current_match_id}_actions.csv", index=False)
-        except Exception as e:
-            print(f"Failed to save actions log CSV: {e}")
+if __name__ == "__main__":
+ Agent(model_name="LSTM",state=True)
 
-        # Persist collected match rows in global state.
-        try:
-            if match_csv:
-                match_id_key = str(current_match_id)
-                Agent_global_state.setdefault("match_id_state", {})
-                Agent_global_state["match_id_state"][match_id_key] = "unknown"
-                Agent_global_state["current_match_id"] = current_match_id + 1
-                save_agent_global_state(Agent_global_state)
-                print("match data saved in json file")
-            else:
-                print("Skipping global state save: no frame rows were captured.")
-        except Exception as e:
-            print(f"Failed to save agent global state: {e}")
-
-
-Agent(model_name="LSTM",state=True)
