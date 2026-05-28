@@ -4,18 +4,25 @@ from inference_sdk import InferenceHTTPClient
 import base64
 from PIL import Image
 from io import BytesIO
+import os
+from dotenv import load_dotenv
 from Ai.ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
 from Ai import State_Tracker
 import cv2
 import numpy as np
 
+# Load environment variables from .env file
+load_dotenv()
 
-API_URL = "http://localhost:9001"
-API_KEY = "obQog4mAaBRuPZZBIoti"
+API_URL = os.getenv("ROBOFLOW_API_URL", "http://localhost:9001")
+API_KEY = os.getenv("ROBOFLOW_API_KEY")
+WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE", "clashroyalbot-z9idj")
+WORKFLOW = os.getenv("ROBOFLOW_WORKFLOW_STATE", "detect-count-and-visualize")
 
-WORKSPACE = "clashroyalbot-z9idj"
-WORKFLOW  = "detect-count-and-visualize"
-IMG_PATH  = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
+if not API_KEY:
+    raise ValueError("ROBOFLOW_API_KEY not found in environment variables. Please check your .env file.")
+
+IMG_PATH = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
@@ -97,23 +104,3 @@ def ExtractData(imgpath):
 #  print("Troops:", Troops_enemy)
 #  print("Towers:", Towers)
 #  print("Elixir:", Elixir)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

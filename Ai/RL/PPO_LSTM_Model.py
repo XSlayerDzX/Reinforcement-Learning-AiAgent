@@ -32,7 +32,7 @@ class PPO_LSTM_Model(nn.Module):
             self.warm_start(pretrained_model_path)
 
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)  # [B, T, H]
+        lstm_out, (h_n, c_n)= self.lstm(x)  # [B, T, H]
         last = lstm_out[:, -1, :]
         last_transformed = self.shared(last)
 
@@ -43,7 +43,7 @@ class PPO_LSTM_Model(nn.Module):
         # Critic output (NEW)
         state_value = self.critic_head(last_transformed)
 
-        return action_logits, pos_logits, state_value
+        return action_logits, pos_logits, state_value , (h_n, c_n)
 
     def warm_start(self, pretrained_model_path):
         """Load weights from the pretrained behavior cloning model."""

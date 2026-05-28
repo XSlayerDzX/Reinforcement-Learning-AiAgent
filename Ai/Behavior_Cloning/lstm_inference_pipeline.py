@@ -59,6 +59,20 @@ class LSTM_Inference_Pipeline:
         self.model.load_state_dict(state_dict)
         self.model.eval()
 
+    def buffer_handler(self, frame_row):
+        cleaned_frame = self.clean_frame(frame_row)
+
+        self.sequence_buffer.append(cleaned_frame)
+
+        current_sequence = list(self.sequence_buffer)
+
+        if len(current_sequence) < self.window_size:
+            pad_rows = self.window_size - len(current_sequence)
+            padding = [[0.0] * self.input_size for _ in range(pad_rows)]
+            current_sequence = padding + current_sequence
+
+        return current_sequence
+
     def reset_sequence_buffer(self):
         self.sequence_buffer.clear()
 
@@ -152,19 +166,7 @@ class LSTM_Inference_Pipeline:
         adjusted_logits[:, self.wait_id] = adjusted_logits[:, self.wait_id] - self.wait_bias_at_full_elixir
         return adjusted_logits
 
-    def buffer_handler(self, frame_row):
-        cleaned_frame = self.clean_frame(frame_row)
 
-        self.sequence_buffer.append(cleaned_frame)
-
-        current_sequence = list(self.sequence_buffer)
-
-        if len(current_sequence) < self.window_size:
-            pad_rows = self.window_size - len(current_sequence)
-            padding = [[0.0] * self.input_size for _ in range(pad_rows)]
-            current_sequence = padding + current_sequence
-
-        return current_sequence
 
     def predict(self, frame_row):
 

@@ -5,7 +5,56 @@ import torch.nn as nn
 from pyclipper import log_action
 
 
+import pandas as pd
 
+
+from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
+from Ai.RL.PPO_Buffer import PPOBuffer
+from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
+from Ai.Data_Cleaning import final_clean
+
+
+def clean_obs(obs):
+    cleaned_frame = final_clean(obs)
+    cleaned_frame = cleaned_frame.drop(columns=["match_id", "id"], errors="ignore")
+    cleaned_frame = cleaned_frame.apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    last_cleaned_columns = cleaned_frame.columns.tolist()
+
+    if cleaned_frame.shape[1] != 205:
+        raise ValueError(
+            f"Expected {205} features, got {cleaned_frame.shape[1]} after cleaning."
+        )
+
+    # Return a flat numeric vector for sequence buffering.
+    return cleaned_frame.iloc[0].astype(float).tolist()
+
+def sequenece_buffering(obs,sequence_buffer,window_size,input_size):
+    cleaned_frame = clean_obs(obs)
+
+    sequence_buffer.append(cleaned_frame)
+
+    current_sequence = list(sequence_buffer)
+
+    if len(current_sequence) < window_size:
+        pad_rows = window_size - len(current_sequence)
+        padding = [[0.0] * input_size for _ in range(pad_rows)]
+        current_sequence = padding + current_sequence
+
+    return current_sequence
+
+def reset_sequence_buffer(sequence_buffer):
+    sequence_buffer.clear()
+
+## masking actions based on availability features in the obs can be done later after the prototype is working end to end,
+## for now we will just let the model learn to not take illegal actions by giving it negative rewards when it does so.
+
+
+###
+
+
+###
+
+###
 
 def actor_critic_update(
         actor_Critic_network,
