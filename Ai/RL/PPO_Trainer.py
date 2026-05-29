@@ -133,14 +133,18 @@ def actor_critic_update(
     advantages_t = (advantages_t - advantages_t.mean()) / (advantages_t.std() + 1e-8)
 
     # --- Forward pass: re-run model on all windows under the CURRENT (updated) policy ---
-    action_logits, pos_logits, value_estimate, _ = actor_critic_network(states_t)
-    # action_logits:  [T, 13]
-    # pos_logits:     [T, 2]
-    # value_estimate: [T, 1]
+    masks_list = rollout["masks"]  # list of T bool tensors, each [13]
+    masks_t = torch.stack(masks_list, dim=0).to(device)  # [T, 13]
 
-    # --- Build distributions from fresh logits ---
-    dist_action = torch.distributions.Categorical(logits=action_logits)      # discrete over 13 actions
-    dist_pos    = torch.distributions.Normal(loc=pos_logits, scale=1.0)      # continuous over (x, y)
+    # --- Forward pass ---
+    action_logits, pos_logits, value_estimate, _ = actor_critic_network(states_t)
+
+    # --- Apply same mask as rollout collection ---
+    masked_action_logits = action_logits.masked_fill(~masks_t, -1e9)  # [T, 13]
+
+    # --- Build distributions from MASKED logits ---
+    dist_action = torch.distributions.Categorical(logits=masked_action_logits)
+    dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0)    # continuous over (x, y)
 
     # --- Current log probs under the NEW policy ---
     action_log_probs  = dist_action.log_prob(actions_t)                      # [T]

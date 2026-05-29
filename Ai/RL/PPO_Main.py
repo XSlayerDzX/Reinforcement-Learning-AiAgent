@@ -4,6 +4,8 @@ from time import sleep
 from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs , compute_returns_and_advantages,actor_critic_update
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
+from Ai.ClashRoyalData import ElixirCost
+from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID
 
 import torch
 import pandas as pd
@@ -50,6 +52,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
         log_probs = []
         rewards = []
         values = []
+        masks = []
         done = False
         slots = {}
         current_slots = {}
@@ -76,6 +79,19 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 # === 1) Build legal‑action mask from current obs ===
                 action_mask = build_action_mask_from_obs(state, num_actions=action_logits.shape[-1])
 
+                # Secondary elixir guard using live current_slots (more reliable than parsed obs)
+                current_elixir = state["Elixir"].iloc[0] if "Elixir" in state.columns else 10
+                try:
+                    current_elixir = float(current_elixir)
+                except (ValueError, TypeError):
+                    current_elixir = 10.0
+
+                for card_name, cost in ElixirCost.items():
+                    avab_key = card_name + "_avab"
+                    aid = AVAIL_FEATURE_TO_ACTION_ID.get(avab_key)
+                    if aid is not None and current_elixir < cost:
+                        action_mask[aid] = False
+
                 # Mask illegal actions like in BC: illegal -> very negative logit
                 masked_action_logits = action_logits.masked_fill(~action_mask, -1e9)
 
@@ -88,7 +104,24 @@ def collect_rollout(env, model, rollouts_to_collect=1):
 
                 action_val = action.item()
 
-                # === 3) Interpret position as grid coords from the BC head ===
+                # === 3) Final elixir safety check — force wait if card is unaffordable ===
+                # Map action_id back to card name
+                ACTION_ID_TO_CARD = {v: k.replace("_avab", "") for k, v in AVAIL_FEATURE_TO_ACTION_ID.items() if
+                                     v is not None}
+                if action_val in ACTION_ID_TO_CARD:
+                    card_name = ACTION_ID_TO_CARD[action_val]
+                    card_cost = ElixirCost.get(card_name, 0)
+                    try:
+                        live_elixir = float(state["Elixir"].iloc[0]) - 1  # -1 safety buffer
+                    except (KeyError, ValueError, TypeError):
+                        live_elixir = 0.0
+                    if live_elixir < card_cost:
+                        print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}")
+                        action_val = WAIT_ID
+                        # Recompute log_prob for wait under the masked distribution
+                        action = torch.tensor(WAIT_ID, dtype=torch.long)
+
+                # === 4) Interpret position as grid coords from the BC head ===
                 if action_val == WAIT_ID:
                     gx, gy = -1, -1
                     pos_x, pos_y = -1.0, -1.0
@@ -141,6 +174,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
 
                 # Store transition
                 windows.append(current_window)
+                masks.append(action_mask)
                 actions.append(action_val)
                 values.append(value_estimate.item())
                 x.append(pos_x)
@@ -156,6 +190,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
             "log_probs": log_probs,
             "rewards": rewards,
             "values": values,
+            "masks": masks,
         }
         r_a = compute_returns_and_advantages(r)
         rollouts.append(r_a)
@@ -179,6 +214,7 @@ def main():
 
     try:
         print("[DEBUG] Attempting to instantiate PPO_LSTM_Model...")
+
         model = PPO_LSTM_Model(
             input_size=205,
             hidden_size=128,
@@ -186,7 +222,20 @@ def main():
             num_actions=13,
             pretrained_model_path=r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Behavior_Cloning\lstm.pth"
         )
-        print("[DEBUG] PPO_LSTM_Model instantiated successfully")
+        opt = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+        # ── Resume from PPO checkpoint if it exists ──────────────────────────
+        import os
+        ppo_save_path = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
+
+        if os.path.exists(ppo_save_path):
+            print("[DEBUG] PPO checkpoint found, resuming from saved weights...")
+            checkpoint = torch.load(ppo_save_path)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            opt.load_state_dict(checkpoint["optimizer_state_dict"])
+            print("[DEBUG] Model and optimizer state restored successfully")
+        else:
+            print("[DEBUG] No PPO checkpoint found, starting from BC warm-start weights")
     except Exception as e:
         print(f"[ERROR] Failed to instantiate PPO_LSTM_Model: {e}")
         traceback.print_exc()
@@ -211,13 +260,23 @@ def main():
         return
 
     try:
-        # Here you would typically call your PPO update function with the collected rollouts
-        print("[DEBUG] PPO update would be called here with the collected rollouts")
+        print("[DEBUG] Starting PPO update...")
         for rollout in rollouts:
-            print(f"[DEBUG] Rollout Update : {rollout}")
-            policy_loss, value_loss = actor_critic_update(actor_critic_network=model, rollout=rollout, optimizer=torch.optim.Adam(model.parameters(), lr=1e-4))
-            print(f"[DEBUG] Policy Loss : {policy_loss}")
-            print(f"[DEBUG] Value Loss : {value_loss}")
+            policy_loss, value_loss = actor_critic_update(
+                actor_critic_network=model,
+                optimizer=opt,
+                rollout=rollout,
+            )
+            print(f"[DEBUG] Policy Loss: {policy_loss:.4f} | Value Loss: {value_loss:.4f}")
+
+        # Save model and optimizer state after update
+        save_path = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
+        torch.save({
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": opt.state_dict(),
+        }, save_path)
+        print(f"[DEBUG] Model saved to {save_path}")
+
     except Exception as e:
         print(f"[ERROR] Failed during PPO update: {e}")
         traceback.print_exc()
