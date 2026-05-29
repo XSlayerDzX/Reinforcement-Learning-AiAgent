@@ -1,11 +1,12 @@
 from collections import deque
 from time import sleep
 
-from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs , compute_returns_and_advantages
+from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs , compute_returns_and_advantages,actor_critic_update
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
 
 import torch
+import pandas as pd
 import traceback
 import sys
 
@@ -16,6 +17,24 @@ from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 
 ## here we will implement the main training loop for PPO, including interaction with the environment, collecting transitions,
 # and updating the policy and value networks using the data in the PPOBuffer. We will also include logging and model saving functionality.
+
+def _ensure_dataframe(obs):
+    """
+    Normalize an observation to a pandas DataFrame expected by the cleaning functions.
+    - If obs is already a DataFrame, return a copy.
+    - If obs is a dict (single row), wrap into DataFrame([obs]).
+    - If obs is None or other unexpected type, return None.
+    """
+    if obs is None:
+        return None
+    if isinstance(obs, pd.DataFrame):
+        return obs.copy()
+    if isinstance(obs, dict):
+        try:
+            return pd.DataFrame([obs])
+        except Exception:
+            return None
+    return None
 
 def collect_rollout(env, model, rollouts_to_collect=1):
     rollouts = []
@@ -35,13 +54,14 @@ def collect_rollout(env, model, rollouts_to_collect=1):
         slots = {}
         current_slots = {}
 
-        state, current_slots = env.reset()
-        if state is None:
-            print("faild to get the env first obs")
-            return
+        state_raw, current_slots = env.reset()
+        state = _ensure_dataframe(state_raw)
+        if state is None or "slot_1" not in state.columns:
+            print("Failed to get valid initial obs from env.reset(), aborting rollout")
+            return rollouts
+
         with torch.no_grad():
             while not done:
-
                 # Build 10x205 window from the current raw obs (pd.DataFrame)
                 current_window = sequenece_buffering(state, window_buffer, 10, 205)
                 window_tensor = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
@@ -70,18 +90,12 @@ def collect_rollout(env, model, rollouts_to_collect=1):
 
                 # === 3) Interpret position as grid coords from the BC head ===
                 if action_val == WAIT_ID:
-                    # Consistent with BC inference: wait => no placement
                     gx, gy = -1, -1
                     pos_x, pos_y = -1.0, -1.0
                 else:
-                    # Treat model outputs as grid indices and clamp
                     gx = int(round(pos[0].item()))
                     gy = int(round(pos[1].item()))
-
-                    # grid_to_pixel itself clamps to [0, GRID_W-1] / [0, GRID_H-1]
                     bs_x, bs_y = grid_to_pixel(gx, gy)
-
-                    # Map Bluestacks virtual coords -> global screen coords
                     pos_x, pos_y = bluestacks_to_global_coords(
                         bs_x,
                         bs_y,
@@ -95,17 +109,35 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 log_prob = (log_prob_action + log_prob_pos).item()
 
                 # Step env with final discrete action + global screen coords
-                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, state,current_slots)
-                while next_state is None:
+                next_state_raw, reward, done, slots = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
+
+                # If step returned None, retry using the last valid raw state (state_raw)
+                retry_attempts = 0
+                while next_state_raw is None and retry_attempts < 5:
                     print("[WARN] Step returned None, retrying after short delay...")
-                    next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, next_state,current_slots)
                     sleep(0.5)
-                if isinstance(next_state, str):
-                    print(f"[INFO] Received terminal status '{next_state}' from env step, treating as done")
+                    next_state_raw, reward, done, slots = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
+                    retry_attempts += 1
+
+                # If env.step returns a terminal string status
+                if isinstance(next_state_raw, str):
+                    print(f"[INFO] Received terminal status '{next_state_raw}' from env step, treating as done")
                     done = True
-                    reward = env.reward_win if next_state.lower() == "win" else env.reward_lose if next_state.lower() == "loss" else 0.0
-                state = next_state
-                current_slots = slots
+                    reward = env.reward_win if next_state_raw.lower() == "win" else env.reward_lose if next_state_raw.lower() == "loss" else 0.0
+                    next_state_raw = None
+
+                # Normalize next_state to DataFrame for downstream processing
+                next_state = _ensure_dataframe(next_state_raw)
+
+                # If normalization failed, keep previous valid state to avoid crashes
+                if next_state is None:
+                    print("[WARN] Received unexpected obs type from env; keeping previous state for next step")
+                    next_state = state.copy()
+                    # keep current_slots unchanged or update from slots if available
+                else:
+                    state_raw = next_state_raw
+                    state = next_state
+                    current_slots = slots
 
                 # Store transition
                 windows.append(current_window)
@@ -115,6 +147,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 y.append(pos_y)
                 log_probs.append(log_prob)
                 rewards.append(reward)
+
         r = {
             "windows": windows,
             "actions": actions,
@@ -163,9 +196,27 @@ def main():
         print("[DEBUG] Starting rollout collection...")
         rollouts = collect_rollout(env, model, rollouts_to_collect=1)
         print(f"[DEBUG] Rollouts collected: {len(rollouts)} rollouts")
-        print(rollouts)
+        if len(rollouts) > 0:
+            first = rollouts[0]
+            print("actions :", len(first.get("actions", [])))
+            print("values :", len(first.get("values", [])))
+            print("log_probs :", len(first.get("log_probs", [])))
+            print("rewards :", len(first.get("rewards", [])))
+            print("windows :", len(first.get("windows", [])))
+        else:
+            print("[DEBUG] No rollouts returned")
     except Exception as e:
         print(f"[ERROR] Failed to collect rollouts: {e}")
+        traceback.print_exc()
+        return
+
+    try:
+        # Here you would typically call your PPO update function with the collected rollouts
+        print("[DEBUG] PPO update would be called here with the collected rollouts")
+        for rollout in rollouts:
+            actor_critic_update(env,model,rollout)
+    except Exception as e:
+        print(f"[ERROR] Failed during PPO update: {e}")
         traceback.print_exc()
         return
 

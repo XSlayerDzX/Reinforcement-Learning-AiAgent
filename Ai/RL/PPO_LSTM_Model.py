@@ -75,8 +75,7 @@ class PPO_LSTM_Model(nn.Module):
 
         try:
             lstm_out, (h_n, c_n) = self.lstm(x)
-            print(f"[DEBUG] LSTM output shape: {lstm_out.shape}")
-            print(f"[DEBUG] Hidden state shape: {h_n.shape}, Cell state shape: {c_n.shape}")
+
         except Exception as e:
             print(f"[ERROR] LSTM forward pass failed: {e}")
             traceback.print_exc()
@@ -84,7 +83,7 @@ class PPO_LSTM_Model(nn.Module):
 
         try:
             last = lstm_out[:, -1, :]
-            print(f"[DEBUG] Last timestep extracted, shape: {last.shape}")
+
         except Exception as e:
             print(f"[ERROR] Failed to extract last timestep: {e}")
             traceback.print_exc()
@@ -92,7 +91,7 @@ class PPO_LSTM_Model(nn.Module):
 
         try:
             last_transformed = self.shared(last)
-            print(f"[DEBUG] Shared transformation applied, shape: {last_transformed.shape}")
+
         except Exception as e:
             print(f"[ERROR] Shared transformation failed: {e}")
             traceback.print_exc()
@@ -101,8 +100,7 @@ class PPO_LSTM_Model(nn.Module):
         try:
             # Actor outputs
             action_logits = self.action_head(last_transformed)
-            print(f"[DEBUG] Action logits computed, shape: {action_logits.shape}")
-            print(f"[DEBUG] Action logits values: {action_logits}")
+
         except Exception as e:
             print(f"[ERROR] Action head failed: {e}")
             traceback.print_exc()
@@ -110,8 +108,7 @@ class PPO_LSTM_Model(nn.Module):
 
         try:
             pos_logits = self.pos_head(last_transformed)
-            print(f"[DEBUG] Position logits computed, shape: {pos_logits.shape}")
-            print(f"[DEBUG] Position logits values: {pos_logits}")
+
         except Exception as e:
             print(f"[ERROR] Position head failed: {e}")
             traceback.print_exc()
@@ -120,13 +117,11 @@ class PPO_LSTM_Model(nn.Module):
         try:
             # Critic output (NEW)
             state_value = self.critic_head(last_transformed)
-            print(f"[DEBUG] State value computed, shape: {state_value.shape}, value: {state_value.item()}")
         except Exception as e:
             print(f"[ERROR] Critic head failed: {e}")
             traceback.print_exc()
             raise
 
-        print("[DEBUG] forward() returning all outputs successfully")
         return action_logits, pos_logits, state_value, (h_n, c_n)
 
     def warm_start(self, pretrained_model_path):

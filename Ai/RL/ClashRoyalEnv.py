@@ -17,7 +17,7 @@ from Ai.check_status import check_match_status
 def Observation(id=0, match_id=0):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}")
     try:
-        current_frame = Frame_Handler()
+        current_frame = Frame_Handler(id)
     except Exception as e:
         print(f"[ERROR] Failed to get current frame: {e}")
         traceback.print_exc()
@@ -38,6 +38,17 @@ def Observation(id=0, match_id=0):
         traceback.print_exc()
         row_dict = None
 
+    try:
+        state = check_match_status(current_frame)
+        print(f"[DEBUG] Match status checked: {state}")
+        if state == "win" or state == "loss":
+            return state, None
+    except Exception as e:
+        print(f"[ERROR] Failed to check match status: {e}")
+        traceback.print_exc()
+        # If status check fails, continue to attempt extracting slots from row_dict
+
+    # If not terminal (or status check failed), try to extract slots from row_dict
     if row_dict:
         try:
             current_slots = {
@@ -50,19 +61,9 @@ def Observation(id=0, match_id=0):
         except Exception as e:
             print(f"[ERROR] Failed to extract slots: {e}")
             traceback.print_exc()
-    else:
-        #check if the match is done
-        try:
-            state = check_match_status(current_frame)
-            print(f"[DEBUG] Match status checked: {state}")
-            if state == "win" or state == "loss":
-                return state, None
-            else:
-                return state, None
-        except Exception as e:
-            print(f"[ERROR] Failed to check match status: {e}")
-            traceback.print_exc()
-            return None, None
+
+    # Default fallback
+    return None, None
 
 
 class ClashRoyalEnv:
@@ -119,6 +120,7 @@ class ClashRoyalEnv:
                     self.current_slots = slots or {}
                     print(f"[DEBUG] Initial observation obtained, shape: {self.obs.shape}, slots: {self.current_slots}")
                     # Return both observation and slots so callers can unpack two values
+                    self.id += 1
                     return self.obs, self.current_slots
                 except Exception as e:
                     print(f"[ERROR] converting observation to DataFrame: {e}")
@@ -144,8 +146,22 @@ class ClashRoyalEnv:
         """
         if state is None:
             print("[ERROR] ClashRoyalEnv.step() called with state None")
-            obs_raw, slots = Observation(getattr(self, "id", 0), getattr(self, "match_id", 0))
+            obs_raw, slots = Observation(getattr(self, "id", self.id), getattr(self, "match_id", 0))
             self.current_slots = slots or getattr(self, "current_slots", {})
+            if obs_raw is not None and isinstance(obs_raw, pd.DataFrame):
+                #compute reward for the initial state
+                reward = 0.0
+                if self.prev_obs is not None:
+                    try:
+                        reward = float(compute_step_reward(self.prev_obs, obs_raw) or 0.0)
+                    except Exception as e:
+                        print(f"[WARN] compute_step_reward failed on initial state: {e}")
+                        traceback.print_exc()
+                        reward = 0.0
+                self.prev_obs = obs_raw
+                self.obs = obs_raw
+                self.id += 1
+                return obs_raw, reward, False, self.current_slots
             return obs_raw, 0.0, False, self.current_slots
 
         try:
@@ -162,8 +178,9 @@ class ClashRoyalEnv:
             self.prev_obs = self.obs
             sleep(self.step_delay)
 
-            obs_raw, slots = Observation(getattr(self, "id", 0), getattr(self, "match_id", 0))
+            obs_raw, slots = Observation(getattr(self, "id", self.id), getattr(self, "match_id", 0))
             self.current_slots = slots or getattr(self, "current_slots", {})
+            self.id+= 1
 
             # handle status strings
             if isinstance(obs_raw, str):
