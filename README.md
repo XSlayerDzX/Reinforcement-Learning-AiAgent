@@ -1,188 +1,291 @@
-# Clash Royale LSTM Agent
+# Clash Royale RL Agent
 
-This project builds an AI agent that plays Clash Royale from BlueStacks screenshots using:
-
-- computer vision for state extraction
-- behavior cloning with an LSTM policy
-- a runtime agent loop that executes predicted actions
-
-The project previously explored Decision Transformer, but that path has been removed from scope.
+A full reinforcement learning pipeline that plays **Clash Royale** autonomously on a Windows PC via BlueStacks. The agent starts from a **Behavior Cloning (BC)** warm-start — an LSTM trained on human gameplay — and is then fine-tuned using **Proximal Policy Optimization (PPO)** with live game interaction.
 
 ---
 
-## Project Focus
+## Architecture Overview
 
-Current focus is one clear pipeline:
-
-1. Capture game state from frames.
-2. Build and clean match datasets.
-3. Train and run an LSTM behavior cloning policy.
-4. Execute actions in BlueStacks through the agent loop.
-
-High-level flow:
-
-```text
-[BlueStacks Frame]
-      |
-      v
-[State Extraction + Features]
-      |
-      v
-[Cleaned Dataset]
-      |
-      v
-[LSTM Behavior Cloning]
-      |
-      v
-[Live Agent Inference + Click/Key Actions]
+```mermaid
+flowchart TD
+    A[BlueStacks Screen Capture] --> B[Frame Handler\nStream_to_frame.py]
+    B --> C[YOLOv8 Object Detection\nRoboflow Models]
+    C --> D[Create_Dataset_Row\nCreate_DataSet.py]
+    D --> E[Observation DataFrame\n205 features]
+    E --> F[Data Cleaning Pipeline\nData_Cleaning.py]
+    F --> G[Sequence Buffer\n10 x 205 window]
+    G --> H[PPO LSTM Model\nPPO_LSTM_Model.py]
+    H --> I1[Action Logits\n13 actions]
+    H --> I2[Position Logits\ngrid x,y]
+    H --> I3[Value Estimate\ncritic]
+    I1 --> J[Action Masking\nelixir + availability]
+    J --> K[Sample Action]
+    I2 --> K
+    K --> L[Coordinate Conversion\ngrid to BlueStacks to Windows]
+    L --> M[React Agent\nAgent_main.py]
+    M --> N[BlueStacks Input\npyautogui click/key]
 ```
 
 ---
 
-## What Is Implemented
+## Training Pipeline
 
-### Perception and state extraction
+```mermaid
+flowchart LR
+    subgraph Phase1[Phase 1 - Behavior Cloning]
+        BC1[Human gameplay recordings] --> BC2[LSTM Training\nlstm.pth]
+    end
 
-- `Ai/StatePredictor.py`:
-  - Detects troops, towers, and elixir from frames.
-- `Ai/CardPredictor.py`:
-  - Detects hand cards for slots 1-4.
-- `Ai/Stream_to_frame.py`:
-  - Captures BlueStacks window frames.
+    subgraph Phase2[Phase 2 - PPO Fine-tuning]
+        P1[Load BC weights\nwarm-start] --> P2[collect_rollout\nlive game]
+        P2 --> P3[compute_returns_and_advantages\ngamma=0.99]
+        P3 --> P4[actor_critic_update\nPPO clipped loss]
+        P4 --> P5[Save checkpoint\nppo_model.pth]
+        P5 --> P2
+    end
 
-### Data collection
-
-- `Ai/Event_listners.py`:
-  - Logs keyboard slot picks and mouse placements.
-- `Ai/Create_DataSet.py`:
-  - Builds one feature row per frame.
-- `Ai/DataSet_Handler.py`:
-  - Runs collection loop and saves per-match input/output CSV files.
-
-### Data cleaning and rewards
-
-- `Ai/Data_Cleaning.py`:
-  - Merges logs, fills missing actions/positions, maps coordinates to grid, adds `*_avab` availability features.
-- `Ai/Reward_System.py`:
-  - Adds frame reward `r` and returns-to-go `rtg` for reward-aware experiments.
-
-### LSTM training and inference
-
-- `Ai/Behavior_Cloning/bc_lstm_training_pipeline.py`:
-  - Training pipeline with action masking, wait handling, and position masking.
-- `Ai/Behavior_Cloning/lstm_inference_pipeline.py`:
-  - Runtime inference with sequence buffer and legal-action masking.
-- `Ai/Agent/Agent_main.py`:
-  - Live gameplay loop: predicts action/position and executes inputs.
+    Phase1 --> Phase2
+```
 
 ---
 
-## Roadmap (Updated)
+## Project Structure
 
-| Phase | Label | Description |
-|---|---|---|
-| 0 | Perception | Detect troops, towers, elixir, and cards from BlueStacks frames. |
-| 1 | Data Collection | Record state-action trajectories from gameplay. |
-| 2 | Cleaning and Features | Merge/clean datasets and build train-ready features. |
-| 3 | BC-LSTM | Train and validate LSTM imitation policy. |
-| 4 | LSTM Agent Runtime | Run the model live with action masking and coordinate conversion. |
-| 5 | PPO Warm Start (Future) | Initialize PPO from LSTM policy and fine-tune online. |
-| 6 | Evaluation | Compare offline imitation and online fine-tuning performance. |
+```
+Reinforcement-Learning-AiAgent/
+│
+├── Ai/
+│   ├── Agent/
+│   │   ├── Agent_main.py           # react_agent: executes actions via pyautogui
+│   │   ├── coordinate_utils.py     # grid -> BlueStacks -> Windows coord conversion
+│   │   └── LSTM_Inference_Pipeline.py
+│   │
+│   ├── Behavior_Cloning/
+│   │   ├── LSTM_Model.py           # BC LSTM architecture
+│   │   ├── LSTM_Train.py           # BC training script
+│   │   ├── action_masking_config.py # Shared masking config (AVAIL_FEATURE_TO_ACTION_ID)
+│   │   └── lstm.pth                # Trained BC weights (warm-start)
+│   │
+│   ├── RL/
+│   │   ├── PPO_LSTM_Model.py       # Actor-critic LSTM (loads BC weights)
+│   │   ├── PPO_Trainer.py          # clean_obs, build_action_mask, actor_critic_update
+│   │   ├── PPO_Main.py             # Main training loop: collect -> update -> save
+│   │   ├── ClashRoyalEnv.py        # Gym-style environment wrapper
+│   │   ├── Reward_System.py        # compute_step_reward (tower HP diff)
+│   │   ├── PPO_Logger.py           # JSON logging: updates, rollouts, win rate
+│   │   └── logs/
+│   │       ├── updates.json        # One entry per training run
+│   │       ├── rollouts.json       # One entry per rollout
+│   │       └── winrate.json        # Win/loss/draw history
+│   │
+│   ├── Roboflow/                   # YOLOv8 model wrappers for game detection
+│   ├── ClashRoyalData.py           # ElixirCost, card metadata, feature schemas
+│   ├── Create_DataSet.py           # Builds observation row from a game frame
+│   ├── Data_Cleaning.py            # final_clean pipeline (slot, positions, avab)
+│   ├── Stream_to_frame.py          # Captures BlueStacks frame to temp PNG
+│   ├── check_status.py             # Win/loss detection from screen
+└─── State_Tracker.py
+│
+├── requirements.txt
+├── .env.example
+└── README.md
+```
 
 ---
 
-## Simple Setup Guide (v1: Run Agent with LSTM)
+## Observation Space
 
-This is the fastest path to run the first working version.
+Each game frame is processed into a **205-feature vector**:
 
-### 1) Requirements
+| Feature group | Description |
+|---|---|
+| `slot_1..4` | Cards currently in hand (cleaned to card availability flags) |
+| `Elixir` | Current elixir count (0–10) |
+| `ally/enemy tower HP` | 6 tower health values |
+| `{troop}_ally/enemy` | Presence flag for each of 11 troop types per side |
+| `{troop}_ally/enemy_x/y` | Grid position (9×18 grid) of each troop |
+| `{troop}_ally_enemy_{troop}_d` | 11×11 pairwise distance matrix between ally and enemy troops |
+| `{card}_avab` | Binary: can this card be played right now (in hand + enough elixir) |
 
-- Windows
-- Python 3.8+
-- BlueStacks (window title used by default: `BlueStacks App Player 1`)
-- Roboflow inference endpoint (local or hosted)
-- Trained model file at `Ai/Behavior_Cloning/lstm.pth`
+A sliding window of the last **10 frames** is stacked into a `[10, 205]` tensor as LSTM input.
 
-### 2) Create a virtual environment
+---
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+## Action Space
+
+13 discrete actions:
+
+| ID | Action |
+|---|---|
+| 0 | Wait |
+| 1 | Play Mini Pekka |
+| 2 | Play Knight |
+| 4 | Play Goblins |
+| 5 | Play Giant |
+| 6 | Play Spear Goblins |
+| 7 | Play Archers |
+| 9 | Play Minions |
+| 10 | Play Musketeer |
+| 11 | Play Goblin Cage |
+| 3, 8, 12 | Reserved / unmapped |
+
+Card actions are accompanied by a continuous `(grid_x, grid_y)` placement position, converted to a BlueStacks pixel coordinate and then to a Windows global screen coordinate before execution.
+
+---
+
+## Action Masking
+
+Three layers of masking are applied at every step to prevent illegal actions:
+
+1. **Availability mask** — built from `*_avab` features in the cleaned observation. A card is only legal if it is in hand (`slot_1..4`) and `elixir >= card_cost`.
+2. **Elixir safety guard** — direct check: `current_elixir - 1 >= card_cost`. The `-1` buffer accounts for the elixir read being one tick behind the live game.
+3. **Force-wait fallback** — if after both checks a card action is still sampled illegally, `action_val` is replaced with `WAIT_ID = 0` before passing to `react_agent`.
+
+The same masks used during rollout collection are stored in the rollout dict and reapplied during the PPO update to keep the old and new policy distributions consistent.
+
+---
+
+## Reward System
+
+Rewards are computed in `Reward_System.py` at every step:
+
+- **Step reward**: difference in tower HP between consecutive observations. Enemy tower damage -> positive. Ally tower damage -> negative.
+- **Terminal reward**: `+1` on win, `-1` on loss, `0` on draw (configured in `ClashRoyalEnv`).
+
+Returns-to-go are computed backwards with `gamma = 0.99` and advantage is `A_t = G_t - V(s_t)`.
+
+---
+
+## PPO Update
+
+The `actor_critic_update` function in `PPO_Trainer.py` implements standard clipped PPO:
+
+```
+L = L_policy + 0.5 x L_value + L_entropy
 ```
 
-### 3) Install dependencies
+- **Policy loss**: clipped surrogate with epsilon = 0.2
+- **Value loss**: MSE between predicted values and discounted returns
+- **Entropy bonus**: coefficient 0.01, encourages exploration
+- **Gradient clipping**: max norm 0.5
 
-```powershell
-pip install inference-sdk pynput pywin32 pygetwindow
-pip install mss numpy pandas opencv-python pyautogui
-pip install torch onnxruntime
+The LSTM shared body + actor head + critic head are all updated jointly.
+
+---
+
+## Logging
+
+Every training run writes to `Ai/RL/logs/`:
+
+### `updates.json` — one entry per run
+```json
+{
+  "update_id": 7,
+  "timestamp": "2026-05-30T00:00:00",
+  "num_rollouts": 3,
+  "total_steps": 240,
+  "outcome": "win",
+  "policy_loss": 0.0412,
+  "value_loss": 0.1823,
+  "mean_reward": 0.043,
+  "explained_var": 0.61,
+  "action_dist": { "wait": 180, "knight": 34, "musketeer": 18, "archers": 8 }
+}
 ```
 
-If you plan to work on RL later:
+### `rollouts.json` — one entry per rollout
+Per-rollout stats: steps, total reward, mean return, mean value estimate, forced-wait count, action distribution.
 
-```powershell
-pip install gymnasium stable-baselines3
+### `winrate.json` — running win/loss/draw history
+Used to compute all-time and rolling win rates for dashboard display.
+
+---
+
+## Requirements
+
+- Windows 10/11
+- BlueStacks 4 (with Clash Royale installed)
+- Python 3.11
+- NVIDIA GPU recommended for faster inference
+
+```bash
+pip install -r requirements.txt
 ```
 
-### 4) Configure Roboflow settings
+Key dependencies: `torch`, `ultralytics`, `pyautogui`, `opencv-python`, `pandas`, `numpy`, `roboflow`
 
-Set API values in:
+---
 
-- `Ai/StatePredictor.py`
-- `Ai/CardPredictor.py`
+## Run Guide
 
-Expected variables:
+### 1. Setup
+
+```bash
+git clone https://github.com/XSlayerDzX/Reinforcement-Learning-AiAgent.git
+cd Reinforcement-Learning-AiAgent
+pip install -r requirements.txt
+cp .env.example .env   # fill in your Roboflow API key
+```
+
+### 2. Start BlueStacks
+
+Open BlueStacks 4, launch Clash Royale, and navigate to the main menu. The agent will wait for a match to begin automatically.
+
+### 3. Run BC inference only (no training)
+
+```bash
+python -m Ai.Agent.Agent_main
+```
+
+Runs the original behavior-cloned LSTM agent without any PPO updates.
+
+### 4. Run PPO training
+
+```bash
+python -m Ai.RL.PPO_Main
+```
+
+- **First run**: loads BC weights from `Ai/Behavior_Cloning/lstm.pth` as warm-start
+- **Subsequent runs**: automatically resumes from `Ai/RL/ppo_model.pth`
+
+The training loop per run:
+1. Waits for a Clash Royale match to begin
+2. Collects one full rollout (one match) of transitions
+3. Computes returns and advantages (`gamma = 0.99`)
+4. Runs PPO update (clipped surrogate + value + entropy)
+5. Saves checkpoint and writes logs
+6. Repeats on next run
+
+### 5. Reset to BC weights
+
+```bash
+del Ai\RL\ppo_model.pth
+```
+
+The next run will restart PPO fine-tuning from the BC warm-start.
+
+---
+
+## Checkpoint Format
 
 ```python
-API_URL = "http://localhost:9001"
-API_KEY = "your_api_key_here"
-WORKSPACE = "your_workspace"
-WORKFLOW = "your_workflow_id"
+# Save
+torch.save({
+    "model_state_dict":     model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+}, "Ai/RL/ppo_model.pth")
+
+# Load / resume
+checkpoint = torch.load("Ai/RL/ppo_model.pth")
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 ```
-
-### 5) Verify local paths/window title
-
-In `Ai/Agent/Agent_main.py`, check:
-
-- `model_path` inside `models_dict` points to your `lstm.pth`
-- BlueStacks window title matches your machine (`BlueStacks App Player 1` by default)
-
-### 6) Run the agent
-
-```powershell
-python Ai/Agent/Agent_main.py
-```
-
-The script will:
-
-- capture frames
-- build feature rows
-- run LSTM inference
-- map predicted grid positions to screen coordinates
-- press slot keys and click positions when action is not `wait`
-
-### 7) Output files
-
-During runs, logs are written under:
-
-- `Ai/lstm_matches/`
-- `Ai/lstm_matches/action_logs/`
-- `Ai/Agent/agent_global_state.json`
-
----
-
-## Current Limitations
-
-- **CV inference latency (major bottleneck):** due to limited GPU resources, vision inference is slow and introduces about **4-5 seconds** delay. This means the agent can understand state changes late and cannot always react immediately to events in the match.
-- **Limited behavior cloning data:** the current `LSTM` model was trained on only **70 matches**, which is small for imitation learning. Adding new matches is necessary for better generalization and stronger in-game behavior.
-- **Limited card/arena coverage:** the current CV pipeline is trained for only a subset of classes and arena conditions, so the agent is not yet robust across all card types and environments.
-- **Team capacity constraint:** AI-side development has mainly been handled by **2 contributors**, so expansion of data and CV coverage depends heavily on community help.
 
 ---
 
 ## Notes
 
-- For deeper LSTM training/inference details, see `Ai/Behavior_Cloning/LSTMreadme.md`.
-- If your model predicts mostly `wait`, check masking config in `Ai/Behavior_Cloning/action_masking_config.py` and training class-balance settings.
-- A dedicated contribution guide (including how to add new match datasets and improve the CV models) will be added in a future README update.
+- The YOLOv8 models (Roboflow) require a valid API key in `.env` for first-time download.
+- `temp_screens/` stores frame captures during inference and is not committed to git.
+- All grid coordinates use a 9x18 arena grid. `grid_to_pixel()` and `bluestacks_to_global_coords()` in `coordinate_utils.py` handle the full conversion chain back to screen clicks.
+- The agent supports the 11-card pool defined in `ClashRoyalData.py`. Adding new cards requires updating `ElixirCost`, `AVAIL_FEATURE_TO_ACTION_ID`, and retraining the BC model.
