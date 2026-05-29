@@ -171,4 +171,36 @@ def actor_critic_update(
 
     return policy_loss.item(), value_loss.item()
 
+def compute_returns_and_advantages(rollout, gamma=0.99):
+    """
+    Takes a rollout dict (from collect_rollout) and adds:
+      - rollout["returns"]    : discounted return-to-go G_t for each step
+      - rollout["advantages"] : A_t = G_t - V_t for each step
+
+    Returns the same dict with those two keys added.
+    """
+    rewards = rollout["rewards"]   # list of T floats
+    values  = rollout["values"]    # list of T floats (critic estimates from rollout)
+    T       = len(rewards)
+
+    returns    = [0.0] * T
+    advantages = [0.0] * T
+
+    # --- Compute returns-to-go backwards ---
+    # G_{T-1} = r_{T-1}
+    # G_t     = r_t + gamma * G_{t+1}
+    running_return = 0.0
+    for t in reversed(range(T)):
+        running_return = rewards[t] + gamma * running_return
+        returns[t] = running_return
+
+    # --- Compute advantages: A_t = G_t - V_t ---
+    for t in range(T):
+        advantages[t] = returns[t] - values[t]
+
+    rollout["returns"]    = returns
+    rollout["advantages"] = advantages
+
+    return rollout
+
 

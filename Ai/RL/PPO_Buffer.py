@@ -47,7 +47,7 @@ class PPOBuffer:
         """Calculates advantages and returns using GAE."""
         rewards = torch.tensor([t.reward for t in self.buffer], dtype=torch.float32)
         values = torch.tensor([t.value for t in self.buffer], dtype=torch.float32)
-        dones = torch.tensor([t.done for t in self.buffer], dtype=torch.float32)
+
 
         advantages = torch.zeros_like(rewards)
         lastgaelam = 0
@@ -102,3 +102,5 @@ class PPOBuffer:
             c_s = chunk[0].c_s.to(device)
 
             yield Batch(states, actions, old_log_probs, returns, advantages, h_s, c_s)
+
+

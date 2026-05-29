@@ -1,7 +1,7 @@
 from collections import deque
 from time import sleep
 
-from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs
+from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs , compute_returns_and_advantages
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
 
@@ -95,7 +95,15 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 log_prob = (log_prob_action + log_prob_pos).item()
 
                 # Step env with final discrete action + global screen coords
-                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, current_slots)
+                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, state,current_slots)
+                while next_state is None:
+                    print("[WARN] Step returned None, retrying after short delay...")
+                    next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, next_state,current_slots)
+                    sleep(0.5)
+                if isinstance(next_state, str):
+                    print(f"[INFO] Received terminal status '{next_state}' from env step, treating as done")
+                    done = True
+                    reward = env.reward_win if next_state.lower() == "win" else env.reward_lose if next_state.lower() == "loss" else 0.0
                 state = next_state
                 current_slots = slots
 
@@ -107,6 +115,21 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 y.append(pos_y)
                 log_probs.append(log_prob)
                 rewards.append(reward)
+        r = {
+            "windows": windows,
+            "actions": actions,
+            "x": x,
+            "y": y,
+            "log_probs": log_probs,
+            "rewards": rewards,
+            "values": values,
+        }
+        r_a = compute_returns_and_advantages(r)
+        rollouts.append(r_a)
+
+    return rollouts
+
+
 
 
 

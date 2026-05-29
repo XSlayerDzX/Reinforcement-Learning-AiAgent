@@ -43,27 +43,17 @@ def compute_reward(match_data_set):
 
 
 def compute_step_reward(prev_obs, curr_obs):
-    """
-    Compute a scalar reward from previous and current observations.
-    Works with dict, pd.Series, or single-row pd.DataFrame.
-    Reward logic: count features that went from 1 -> 0.
-      - if an `enemy_` feature dropped: +1 per drop
-      - if an `ally_` feature dropped: -1 per drop
-    Returns float.
-    """
     if prev_obs is None or curr_obs is None:
         return 0.0
 
     def to_series(o):
         if isinstance(o, pd.DataFrame):
-            if o.shape[0] >= 1:
-                return o.iloc[0]
-            return pd.Series(dtype="int64")
+            return o.iloc[0] if o.shape[0] >= 1 else pd.Series(dtype="float64")
         if isinstance(o, pd.Series):
             return o
         if isinstance(o, dict):
             return pd.Series(o)
-        return pd.Series(dtype="int64")
+        return pd.Series(dtype="float64")
 
     prev_s = to_series(prev_obs)
     curr_s = to_series(curr_obs)
@@ -75,23 +65,31 @@ def compute_step_reward(prev_obs, curr_obs):
     if common.empty:
         return 0.0
 
-    prev_aligned = prev_s[common].fillna(0).astype(int)
-    curr_aligned = curr_s[common].fillna(0).astype(int)
+    # === FIX: only keep numeric columns before casting ===
+    prev_common = prev_s[common]
+    curr_common = curr_s[common]
 
-    diff = prev_aligned - curr_aligned  # positive means value decreased
+    numeric_cols = common[
+        pd.to_numeric(prev_common, errors='coerce').notna() &
+        pd.to_numeric(curr_common, errors='coerce').notna()
+    ]
+
+    if numeric_cols.empty:
+        return 0.0
+
+    prev_aligned = prev_s[numeric_cols].fillna(0).astype(float)
+    curr_aligned = curr_s[numeric_cols].fillna(0).astype(float)
+
+    diff = prev_aligned - curr_aligned
     reward = 0.0
 
     for col, d in diff.items():
         if d <= 0:
             continue
-        # positive decrease happened
         if str(col).startswith("enemy_"):
             reward += float(d)
         elif str(col).startswith("ally_"):
             reward -= float(d)
-        else:
-            # neutral/unknown features: treat decreases as negative to agent (optional)
-            reward += 0.0
 
     return float(reward)
 

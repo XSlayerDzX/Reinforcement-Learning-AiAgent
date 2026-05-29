@@ -18,11 +18,11 @@ def Observation(id=0, match_id=0):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}")
     try:
         current_frame = Frame_Handler()
-        print(f"[DEBUG] Frame captured successfully, type: {type(current_frame)}")
     except Exception as e:
-        print(f"[ERROR] Failed to capture frame: {e}")
+        print(f"[ERROR] Failed to get current frame: {e}")
         traceback.print_exc()
         return None, None
+
 
     if current_frame is None:
         print("[DEBUG] current_frame is None, returning None")
@@ -46,7 +46,6 @@ def Observation(id=0, match_id=0):
                 "slot_3": row_dict["slot_3"],
                 "slot_4": row_dict["slot_4"],
             }
-            print(f"[DEBUG] Slots extracted: {current_slots}")
             return row_dict, current_slots
         except Exception as e:
             print(f"[ERROR] Failed to extract slots: {e}")
@@ -59,7 +58,7 @@ def Observation(id=0, match_id=0):
             if state == "win" or state == "loss":
                 return state, None
             else:
-                return None, None
+                return state, None
         except Exception as e:
             print(f"[ERROR] Failed to check match status: {e}")
             traceback.print_exc()
@@ -135,7 +134,7 @@ class ClashRoyalEnv:
         print("[ERROR] Failed to get initial observation after retries")
         return None, None
 
-    def step(self, action, pos_x, pos_y, current_slots=None):
+    def step(self, action, pos_x, pos_y,state ,current_slots=None):
         """
         Execute action and return a 4-tuple: (next_obs, reward, done, slots)
         next_obs: pd.DataFrame or None or status string
@@ -143,6 +142,12 @@ class ClashRoyalEnv:
         done: bool
         slots: dict (may be {} or None)
         """
+        if state is None:
+            print("[ERROR] ClashRoyalEnv.step() called with state None")
+            obs_raw, slots = Observation(getattr(self, "id", 0), getattr(self, "match_id", 0))
+            self.current_slots = slots or getattr(self, "current_slots", {})
+            return obs_raw, 0.0, False, self.current_slots
+
         try:
             slots_to_use = current_slots if current_slots is not None else getattr(self, "current_slots", {})
             try:
@@ -164,12 +169,16 @@ class ClashRoyalEnv:
             if isinstance(obs_raw, str):
                 status = obs_raw.lower()
                 if status == "win":
-                    return obs_raw, float(self.reward_win), True, self.current_slots
+                    print("win detected in step observation, returning terminal state")
+                    return status, float(self.reward_win), True, self.current_slots
                 if status == "loss":
-                    return obs_raw, float(self.reward_lose), True, self.current_slots
-                return obs_raw, 0.0, False, self.current_slots
+                    print("loss detected in step observation, returning terminal state")
+                    return status, float(self.reward_lose), True, self.current_slots
+                print("draw detected in step observation, returning terminal state")
+                return status, 0.0, False, self.current_slots
 
             if obs_raw is None:
+                print("[WARN] Observation returned None, treating as no change")
                 return None, 0.0, False, self.current_slots
 
             # ensure DataFrame

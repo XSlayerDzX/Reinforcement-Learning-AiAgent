@@ -93,10 +93,10 @@ def calibrate(path: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    BASE = "C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/image_process"
-    #print(check_match_status(f"{BASE}/temp_screens/capture_0.png"))
-    print(check_match_status(f"{BASE}/test_win.png"))
+# if __name__ == "__main__":
+#     BASE = "C:/Users/SK-TECH/PycharmProjects/clash-royale-rl-agent/Ai/image_process"
+#     #print(check_match_status(f"{BASE}/temp_screens/capture_0.png"))
+#     print(check_match_status(f"{BASE}/test_win.png"))
 
 
     #calibrate(f"{BASE}/test_win.png")
