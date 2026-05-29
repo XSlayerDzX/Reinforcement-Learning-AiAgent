@@ -3,6 +3,11 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 from pyclipper import log_action
+from Ai.Behavior_Cloning.action_masking_config import (
+    WAIT_ID,
+    ALWAYS_ALLOW_WAIT,
+    AVAIL_FEATURE_TO_ACTION_ID,
+)
 
 
 import pandas as pd
@@ -24,6 +29,45 @@ def clean_obs(obs):
 
     # Return a flat numeric vector for sequence buffering.
     return cleaned_frame.iloc[0].astype(float).tolist()
+
+def build_action_mask_from_obs(obs, num_actions=13):
+    """
+    Build a [num_actions] bool mask from a raw env observation (pd.DataFrame),
+    using the same availability logic as behavior cloning.
+
+    True  => action is legal
+    False => action is masked out (logit -> -1e9)
+    """
+    try:
+        # Reuse your existing cleaning pipeline so *_avab columns are created.
+        cleaned_df = final_clean(obs)
+        if not isinstance(cleaned_df, pd.DataFrame) or cleaned_df.empty:
+            return torch.ones(num_actions, dtype=torch.bool)
+
+        last_row = cleaned_df.iloc[0]
+    except Exception:
+        # On any failure, fail open: allow all actions.
+        return torch.ones(num_actions, dtype=torch.bool)
+
+    mask = torch.ones(num_actions, dtype=torch.bool)
+
+    # Start by marking all mapped ids illegal, then re‑enable when their *_avab > 0
+    mapped_ids = {v for v in AVAIL_FEATURE_TO_ACTION_ID.values() if v is not None}
+    for aid in mapped_ids:
+        if 0 <= aid < num_actions:
+            mask[aid] = False
+
+    for feat, aid in AVAIL_FEATURE_TO_ACTION_ID.items():
+        if aid is None or not (0 <= aid < num_actions):
+            continue
+        if feat in last_row.index and last_row[feat] > 0:
+            mask[aid] = True
+
+    # Wait is always allowed
+    if ALWAYS_ALLOW_WAIT and 0 <= WAIT_ID < num_actions:
+        mask[WAIT_ID] = True
+
+    return mask
 
 def sequenece_buffering(obs,sequence_buffer,window_size,input_size):
     cleaned_frame = clean_obs(obs)
@@ -54,136 +98,77 @@ def reset_sequence_buffer(sequence_buffer):
 ###
 
 def actor_critic_update(
-        actor_Critic_network,
+        actor_critic_network,
         optimizer,
-        states,
-        actions,
-        returns,
-        old_log_probs,
-        advantages,
-        h_s,  # Initial hidden state for the batch
-        c_s,  # Initial cell state for the batch
-        vf = 0.5,
+        rollout,          # dict from collect_rollout, must include "advantages" and "returns"
+        vf=0.5,
         ent_coef=0.01,
-        epsilon=0.2):
+        epsilon=0.2,
+):
+    device = next(actor_critic_network.parameters()).device
 
-    # 1. Get the current policy's log probabilities for the actions taken
-    # (Assuming actor_network outputs logits , and critic_network outputs value estimates, and both can take LSTM states as input)
+    # --- Unpack rollout dict ---
+    windows       = rollout["windows"]       # list of T items, each [10, 205]
+    actions       = rollout["actions"]       # list of T ints
+    xs            = rollout["x"]             # list of T floats (global screen x)
+    ys            = rollout["y"]             # list of T floats (global screen y)
+    old_log_probs = rollout["log_probs"]     # list of T floats (action+pos combined)
+    advantages    = rollout["advantages"]    # list of T floats (precomputed outside)
+    returns       = rollout["returns"]       # list of T floats (precomputed outside)
 
-    actions_logits ,pos_logits , value_estimate , _ = actor_Critic_network(states, h_s, c_s)  # Get action logits, position logits, and value estimate from the network
+    T = len(windows)
 
-    # torch.distributions.Categorical applies softmax internally, so we can directly pass the logits without applying softmax ourselves.
-    dist_action = torch.distributions.Categorical(logits=actions_logits)
-    dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0)
+    # --- Convert to tensors ---
+    states_t      = torch.tensor(windows,       dtype=torch.float32, device=device)  # [T, 10, 205]
+    actions_t     = torch.tensor(actions,       dtype=torch.long,    device=device)  # [T]
+    positions_t   = torch.stack([
+                        torch.tensor(xs, dtype=torch.float32, device=device),
+                        torch.tensor(ys, dtype=torch.float32, device=device)
+                    ], dim=1)                                                         # [T, 2]
+    old_lp_t      = torch.tensor(old_log_probs, dtype=torch.float32, device=device)  # [T]
+    advantages_t  = torch.tensor(advantages,    dtype=torch.float32, device=device)  # [T]
+    returns_t     = torch.tensor(returns,       dtype=torch.float32, device=device)  # [T]
 
-    # log_prob applies log to the probabilities, so we can directly pass the logits without applying softmax ourselves.
-    action_log_probs = dist_action.log_prob(actions[0])
-    pos_log_prob = dist_pos.log_prob(torch.stack([actions[1], actions[2]],dim=-1))  # Assuming actions[1] and actions[2] are the position coordinates
-    current_log_probs = action_log_probs + pos_log_prob.sum(dim=-1)  # Total log prob for the combined action
+    # Normalize advantages (stabilizes training)
+    advantages_t = (advantages_t - advantages_t.mean()) / (advantages_t.std() + 1e-8)
 
-    # 2. Calculate the probability ratio: r_t(theta)
-    # Using log probabilities makes this numerically stable (exp(log_a - log_b) = a/b)
-    ratios = torch.exp(current_log_probs - old_log_probs)
+    # --- Forward pass: re-run model on all windows under the CURRENT (updated) policy ---
+    action_logits, pos_logits, value_estimate, _ = actor_critic_network(states_t)
+    # action_logits:  [T, 13]
+    # pos_logits:     [T, 2]
+    # value_estimate: [T, 1]
 
-    # 3. Calculate the two parts of the PPO min() function
-    surrogate1 = ratios * advantages
-    surrogate2 = torch.clamp(ratios, 1.0 - epsilon, 1.0 + epsilon) * advantages
+    # --- Build distributions from fresh logits ---
+    dist_action = torch.distributions.Categorical(logits=action_logits)      # discrete over 13 actions
+    dist_pos    = torch.distributions.Normal(loc=pos_logits, scale=1.0)      # continuous over (x, y)
 
-    # 4. The PPO Objective (Maximization)
-    policy_loss = - torch.min(surrogate1, surrogate2).mean()
+    # --- Current log probs under the NEW policy ---
+    action_log_probs  = dist_action.log_prob(actions_t)                      # [T]
+    pos_log_probs     = dist_pos.log_prob(positions_t).sum(dim=-1)           # [T, 2] -> sum -> [T]
+    current_log_probs = action_log_probs + pos_log_probs                     # [T]
 
-    # PyTorch networks often output shape (batch_size, 1).
-    # We need to squeeze it to (batch_size,) so it matches the 'returns' tensor perfectly.
-    values = value_estimate.squeeze(-1)
-    values_loss = F.mse_loss(values, returns)
+    # --- PPO clipped policy loss ---
+    ratios    = torch.exp(current_log_probs - old_lp_t)                      # [T]
+    surr1     = ratios * advantages_t                                         # [T]
+    surr2     = torch.clamp(ratios, 1.0 - epsilon, 1.0 + epsilon) * advantages_t  # [T]
+    policy_loss = -torch.min(surr1, surr2).mean()
 
-    entropy = dist_action.entropy() + dist_pos.entropy().sum(-1) # Total entropy from both distributions
-    entropy_loss =  - ent_coef * entropy.mean()  # Entropy bonus to encourage exploration (adjust coefficient as needed)
+    # --- Value loss ---
+    values      = value_estimate.squeeze(-1)                                  # [T, 1] -> [T]
+    value_loss  = F.mse_loss(values, returns_t)
 
-    loss = policy_loss + vf * values_loss + entropy_loss
+    # --- Entropy bonus ---
+    entropy     = dist_action.entropy() + dist_pos.entropy().sum(-1)         # [T]
+    entropy_loss = -ent_coef * entropy.mean()
 
-    optimizer.zero_grad()  # Clear old gradients
-    loss.backward()  # Calculate new gradients
-    torch.nn.utils.clip_grad_norm_(actor_Critic_network.parameters(), max_norm=0.5)
-    optimizer.step()  # Update the network weights
+    # --- Total loss ---
+    loss = policy_loss + vf * value_loss + entropy_loss
 
-    return   policy_loss.item(), values_loss.item()
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(actor_critic_network.parameters(), max_norm=0.5)
+    optimizer.step()
 
-### PPO Trainer function that combines all the steps together
-# def train_loop(env, model, buffer, epochs=10, batch_size=64 , lr=3e-4):
-#     optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # You can adjust the learning rate as needed
-#
-#     # PHASE 1: Rollout (Data Collection)
-#     model.eval()  # Set to evaluation mode for playing
-#     state = env.reset()
-#     h_s , c_s = model.get_initial_lstm_states()  # Get initial LSTM states (if using LSTM)
-#
-#     while not buffer.is_full():
-#         with torch.no_grad():  # Don't track gradients during gameplay
-#             # Add a sequence dimension for the single frame [Batch=1, Time=1, Features]
-#             state_inpt = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
-#             action_logits, pos_logits, value_estimate , (next_h_s, next_c_s) = model(state_inpt, h_s, c_s)
-#
-#             # Remove the batch/time dimensions for sampling
-#             action_logits = action_logits.squeeze()
-#             pos_logits = pos_logits.squeeze()
-#             value_estimate = value_estimate.squeeze()
-#
-#             dist_action = torch.distributions.Categorical(logits=action_logits).sample()
-#             dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0).sample()
-#
-#             log_action = dist_action.log_prob(dist_action)
-#             log_pos = dist_pos.log_prob(dist_pos).sum(dim=-1)  # Total log prob for the combined action
-#             log_prob = log_action + log_pos
-#
-#             action = (dist_action.item(), dist_pos[0].item(), dist_pos[1].item())
-#         # Step the environment and get the RAW reward
-#         # verify env.step((dist_action.cpu().numpy(), dist_pos.cpu().numpy()))
-#         next_state, reward, done = env.step(action)  # Assuming your env can take the action in this format
-#
-#         # Store in PPO_Buffer
-#         buffer.add(state, action, log_prob, reward, value_estimate, h_s, c_s, done)
-#         state = next_state
-#         h_s , c_s = next_h_s, next_c_s  # Update LSTM states for the next step
-#
-#         if done:
-#             state = env.reset()
-#             h_s , c_s = model.get_initial_lstm_states()  # Reset LSTM states for new episode
-
-
-    # PHASE 2: Advantage Estimation (GAE)
-    # Get the value of the final state to bootstrap GAE
-    # with torch.no_grad():
-    #     next_state_input = torch.tensor(next_state).unsqueeze(0).unsqueeze(0)
-    #     _,_,next_value,_ = model(next_state_input, h_s, c_s)  # Get value estimate for the final state
-    #     next_value = next_value.squeeze()
-    # buffer.compute_gae(next_value)
-    #
-    #
-    # # PHASE 3: Network Updates
-    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # model.to(device)
-    # model.train()  # Switch back to training mode to update weights
-    #
-    # for epoch in range(epochs):
-    #     # Yield mini-batches of size 64
-    #     for batch in buffer.generate_sequential_batches(sequence_length=batch_size, device=device):
-    #         state_seq = batch.states.unsqueeze(0)  # Add batch dimension for LSTM input
-    #         actor_loss , critic_loss = actor_critic_update(model=model,
-    #                                                        optimizer=optimizer,
-    #                                                        states=state_seq,
-    #                                                        actions=batch.actions,
-    #                                                        returns=batch.returns,
-    #                                                        old_log_probs=batch.old_log_probs,
-    #                                                        advantages=batch.advantages,
-    #                                                        h_s=batch.h_s,
-    #                                                        c_s=batch.c_s,
-    #                                                        vf=0.5,
-    #                                                        ent_coef=0.01,
-    #                                                        epsilon=0.2)
-    #         print(f"Epoch {epoch+1}/{epochs}, Actor Loss: {actor_loss:.4f}, Critic Loss: {critic_loss:.4f}")
-    #
-    # # Clear the buffer for the next game
-    # buffer.reset_buffer()
+    return policy_loss.item(), value_loss.item()
 
 

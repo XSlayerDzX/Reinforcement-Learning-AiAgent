@@ -1,13 +1,16 @@
 from collections import deque
 from time import sleep
 
+from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs
+from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
+from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
+
 import torch
 import traceback
 import sys
 
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
-from Ai.RL.PPO_Trainer import sequenece_buffering
 
 
 
@@ -39,39 +42,64 @@ def collect_rollout(env, model, rollouts_to_collect=1):
         with torch.no_grad():
             while not done:
 
+                # Build 10x205 window from the current raw obs (pd.DataFrame)
                 current_window = sequenece_buffering(state, window_buffer, 10, 205)
-
-                # Convert list to tensor and add batch dimension [1, 10, 205]
                 window_tensor = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
 
+                # Forward pass
                 action_logits, pos_logits, value_estimate, (h_s, c_s) = model(window_tensor)
 
-                # Remove batch dimension for distribution sampling
+                # Remove batch dimension
                 action_logits = action_logits.squeeze(0)
                 pos_logits = pos_logits.squeeze(0)
 
-                # Sample actions for PPO exploration
-                dist_action = torch.distributions.Categorical(logits=action_logits)
+                # === 1) Build legal‑action mask from current obs ===
+                action_mask = build_action_mask_from_obs(state, num_actions=action_logits.shape[-1])
+
+                # Mask illegal actions like in BC: illegal -> very negative logit
+                masked_action_logits = action_logits.masked_fill(~action_mask, -1e9)
+
+                # === 2) Sample action and position ===
+                dist_action = torch.distributions.Categorical(logits=masked_action_logits)
                 dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0)
 
                 action = dist_action.sample()
                 pos = dist_pos.sample()
 
                 action_val = action.item()
-                pos_x = pos[0].item()
-                pos_y = pos[1].item()
 
-                # Compute log probabilities properly
+                # === 3) Interpret position as grid coords from the BC head ===
+                if action_val == WAIT_ID:
+                    # Consistent with BC inference: wait => no placement
+                    gx, gy = -1, -1
+                    pos_x, pos_y = -1.0, -1.0
+                else:
+                    # Treat model outputs as grid indices and clamp
+                    gx = int(round(pos[0].item()))
+                    gy = int(round(pos[1].item()))
+
+                    # grid_to_pixel itself clamps to [0, GRID_W-1] / [0, GRID_H-1]
+                    bs_x, bs_y = grid_to_pixel(gx, gy)
+
+                    # Map Bluestacks virtual coords -> global screen coords
+                    pos_x, pos_y = bluestacks_to_global_coords(
+                        bs_x,
+                        bs_y,
+                        bluestacks_resolution=(540, 960),
+                        window_title="BlueStacks App Player 4",
+                    )
+
+                # === 4) Log probabilities from the masked distributions ===
                 log_prob_action = dist_action.log_prob(action)
                 log_prob_pos = dist_pos.log_prob(pos).sum(dim=-1)
                 log_prob = (log_prob_action + log_prob_pos).item()
 
-                # Pass arguments as separate parameters
-                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y,current_slots)
+                # Step env with final discrete action + global screen coords
+                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y, current_slots)
                 state = next_state
                 current_slots = slots
 
-                # Store the transition
+                # Store transition
                 windows.append(current_window)
                 actions.append(action_val)
                 values.append(value_estimate.item())
@@ -79,18 +107,6 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 y.append(pos_y)
                 log_probs.append(log_prob)
                 rewards.append(reward)
-
-        rollouts.append({
-            "windows": windows,
-            "actions": actions,
-            "x": x,
-            "y": y,
-            "log_probs": log_probs,
-            "rewards": rewards,
-            "values": values
-        })
-
-    return rollouts
 
 
 
