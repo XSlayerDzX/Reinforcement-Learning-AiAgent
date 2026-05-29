@@ -15,6 +15,8 @@ import sys
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 
+from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
+
 
 
 ## here we will implement the main training loop for PPO, including interaction with the environment, collecting transitions,
@@ -261,15 +263,37 @@ def main():
 
     try:
         print("[DEBUG] Starting PPO update...")
-        for rollout in rollouts:
-            policy_loss, value_loss = actor_critic_update(
+        update_id = get_next_update_id()
+        final_policy_loss = 0.0
+        final_value_loss = 0.0
+        outcome = None
+
+        for i, rollout in enumerate(rollouts):
+            # Log each rollout individually
+            log_rollout(update_id, i, rollout)
+
+            # Track outcome from terminal reward
+            terminal_reward = rollout["rewards"][-1] if rollout["rewards"] else 0
+            if terminal_reward >= env.reward_win:
+                outcome = "win"
+            elif terminal_reward <= env.reward_lose:
+                outcome = "loss"
+            else:
+                outcome = "draw"
+
+            final_policy_loss, final_value_loss = actor_critic_update(
                 actor_critic_network=model,
                 optimizer=opt,
                 rollout=rollout,
             )
-            print(f"[DEBUG] Policy Loss: {policy_loss:.4f} | Value Loss: {value_loss:.4f}")
+            print(f"[DEBUG] Rollout {i} → Policy Loss: {final_policy_loss:.4f} | Value Loss: {final_value_loss:.4f}")
 
-        # Save model and optimizer state after update
+        # Log the full update (one entry per run)
+        log_update(update_id, rollouts, final_policy_loss, final_value_loss, outcome)
+        if outcome:
+            log_winrate(outcome)
+
+        # Save model
         save_path = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
         torch.save({
             "model_state_dict": model.state_dict(),
