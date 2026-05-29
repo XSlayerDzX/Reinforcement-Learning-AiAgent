@@ -214,7 +214,10 @@ def main():
         # Here you would typically call your PPO update function with the collected rollouts
         print("[DEBUG] PPO update would be called here with the collected rollouts")
         for rollout in rollouts:
-            actor_critic_update(env,model,rollout)
+            print(f"[DEBUG] Rollout Update : {rollout}")
+            policy_loss, value_loss = actor_critic_update(actor_critic_network=model, rollout=rollout, optimizer=torch.optim.Adam(model.parameters(), lr=1e-4))
+            print(f"[DEBUG] Policy Loss : {policy_loss}")
+            print(f"[DEBUG] Value Loss : {value_loss}")
     except Exception as e:
         print(f"[ERROR] Failed during PPO update: {e}")
         traceback.print_exc()
