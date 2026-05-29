@@ -1,23 +1,26 @@
 from collections import deque
+from time import sleep
 
 import torch
-import Ai.RL.ClashRoyalEnv
-import Ai.RL.PPO_LSTM_Model
-import Ai.RL.PPO_Trainer
+import traceback
+import sys
+
+from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
+from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 from Ai.RL.PPO_Trainer import sequenece_buffering
+
 
 
 ## here we will implement the main training loop for PPO, including interaction with the environment, collecting transitions,
 # and updating the policy and value networks using the data in the PPOBuffer. We will also include logging and model saving functionality.
 
-def collect_rollout(env, model,rollouts_to_collect=1):
+def collect_rollout(env, model, rollouts_to_collect=1):
     rollouts = []
     window_buffer = deque(maxlen=10)
 
-
     for rollout in range(rollouts_to_collect):
+        model.eval()
         window_buffer.clear()
-        states = []
         windows = []
         actions = []
         x = []
@@ -25,29 +28,110 @@ def collect_rollout(env, model,rollouts_to_collect=1):
         log_probs = []
         rewards = []
         values = []
-        next_states = []
-        h_s_list = []
-        c_s_list = []
         done = False
+        slots = {}
+        current_slots = {}
 
-        h_s, c_s = None, None  # Initialize LSTM states
-        state = env.reset()  ## Reset the environment to get the initial state
-        while not done:
-           current_window =  sequenece_buffering(state, window_buffer,10,205)
-           action_logits, pos_logits , value_estimate , (h_s, c_s) = model.forward(current_window)
-           ##get the action and log probability
-           action = torch.argmax(action_logits, dim=-1).item()  # Get the action
-           log_prob = action_logits.gather(-1, action).squeeze(-1)
-           pos_x = pos_logits[0, 0].item()  # Get the x position
-           pos_y = pos_logits[0, 1].item()  # Get the y
+        state, current_slots = env.reset()
+        if state is None:
+            print("faild to get the env first obs")
+            return
+        with torch.no_grad():
+            while not done:
+
+                current_window = sequenece_buffering(state, window_buffer, 10, 205)
+
+                # Convert list to tensor and add batch dimension [1, 10, 205]
+                window_tensor = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
+
+                action_logits, pos_logits, value_estimate, (h_s, c_s) = model(window_tensor)
+
+                # Remove batch dimension for distribution sampling
+                action_logits = action_logits.squeeze(0)
+                pos_logits = pos_logits.squeeze(0)
+
+                # Sample actions for PPO exploration
+                dist_action = torch.distributions.Categorical(logits=action_logits)
+                dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0)
+
+                action = dist_action.sample()
+                pos = dist_pos.sample()
+
+                action_val = action.item()
+                pos_x = pos[0].item()
+                pos_y = pos[1].item()
+
+                # Compute log probabilities properly
+                log_prob_action = dist_action.log_prob(action)
+                log_prob_pos = dist_pos.log_prob(pos).sum(dim=-1)
+                log_prob = (log_prob_action + log_prob_pos).item()
+
+                # Pass arguments as separate parameters
+                next_state, reward, done, slots = env.step(action_val, pos_x, pos_y,current_slots)
+                state = next_state
+                current_slots = slots
+
+                # Store the transition
+                windows.append(current_window)
+                actions.append(action_val)
+                values.append(value_estimate.item())
+                x.append(pos_x)
+                y.append(pos_y)
+                log_probs.append(log_prob)
+                rewards.append(reward)
+
+        rollouts.append({
+            "windows": windows,
+            "actions": actions,
+            "x": x,
+            "y": y,
+            "log_probs": log_probs,
+            "rewards": rewards,
+            "values": values
+        })
+
+    return rollouts
 
 
 
+def main():
+    print("[DEBUG] Starting main function")
+    try:
+        print("[DEBUG] Attempting to instantiate ClashRoyalEnv...")
+        env = ClashRoyalEnv()
+        print("[DEBUG] ClashRoyalEnv instantiated successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to instantiate ClashRoyalEnv: {e}")
+        traceback.print_exc()
+        return
+
+    try:
+        print("[DEBUG] Attempting to instantiate PPO_LSTM_Model...")
+        model = PPO_LSTM_Model(
+            input_size=205,
+            hidden_size=128,
+            num_layers=2,
+            num_actions=13,
+            pretrained_model_path=r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Behavior_Cloning\lstm.pth"
+        )
+        print("[DEBUG] PPO_LSTM_Model instantiated successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to instantiate PPO_LSTM_Model: {e}")
+        traceback.print_exc()
+        return
+
+    try:
+        print("[DEBUG] Starting rollout collection...")
+        rollouts = collect_rollout(env, model, rollouts_to_collect=1)
+        print(f"[DEBUG] Rollouts collected: {len(rollouts)} rollouts")
+        print(rollouts)
+    except Exception as e:
+        print(f"[ERROR] Failed to collect rollouts: {e}")
+        traceback.print_exc()
+        return
 
 
-
-
-
-
-
-
+if __name__ == "__main__":
+    print("[DEBUG] PPO_Main.py started")
+    main()
+    print("[DEBUG] PPO_Main.py completed")

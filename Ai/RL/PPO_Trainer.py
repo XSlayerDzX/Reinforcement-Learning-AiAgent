@@ -8,9 +8,6 @@ from pyclipper import log_action
 import pandas as pd
 
 
-from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
-from Ai.RL.PPO_Buffer import PPOBuffer
-from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 from Ai.Data_Cleaning import final_clean
 
 
@@ -113,79 +110,80 @@ def actor_critic_update(
     return   policy_loss.item(), values_loss.item()
 
 ### PPO Trainer function that combines all the steps together
-def train_loop(env, model, buffer, epochs=10, batch_size=64 , lr=3e-4):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # You can adjust the learning rate as needed
-
-    # PHASE 1: Rollout (Data Collection)
-    model.eval()  # Set to evaluation mode for playing
-    state = env.reset()
-    h_s , c_s = model.get_initial_lstm_states()  # Get initial LSTM states (if using LSTM)
-
-    while not buffer.is_full():
-        with torch.no_grad():  # Don't track gradients during gameplay
-            # Add a sequence dimension for the single frame [Batch=1, Time=1, Features]
-            state_inpt = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
-            action_logits, pos_logits, value_estimate , (next_h_s, next_c_s) = model(state_inpt, h_s, c_s)
-
-            # Remove the batch/time dimensions for sampling
-            action_logits = action_logits.squeeze()
-            pos_logits = pos_logits.squeeze()
-            value_estimate = value_estimate.squeeze()
-
-            dist_action = torch.distributions.Categorical(logits=action_logits).sample()
-            dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0).sample()
-
-            log_action = dist_action.log_prob(dist_action)
-            log_pos = dist_pos.log_prob(dist_pos).sum(dim=-1)  # Total log prob for the combined action
-            log_prob = log_action + log_pos
-
-            action = (dist_action.item(), dist_pos[0].item(), dist_pos[1].item())
-        # Step the environment and get the RAW reward
-        # verify env.step((dist_action.cpu().numpy(), dist_pos.cpu().numpy()))
-        next_state, reward, done = env.step(action)  # Assuming your env can take the action in this format
-
-        # Store in PPO_Buffer
-        buffer.add(state, action, log_prob, reward, value_estimate, h_s, c_s, done)
-        state = next_state
-        h_s , c_s = next_h_s, next_c_s  # Update LSTM states for the next step
-
-        if done:
-            state = env.reset()
-            h_s , c_s = model.get_initial_lstm_states()  # Reset LSTM states for new episode
+# def train_loop(env, model, buffer, epochs=10, batch_size=64 , lr=3e-4):
+#     optimizer = torch.optim.Adam(model.parameters(), lr=lr)  # You can adjust the learning rate as needed
+#
+#     # PHASE 1: Rollout (Data Collection)
+#     model.eval()  # Set to evaluation mode for playing
+#     state = env.reset()
+#     h_s , c_s = model.get_initial_lstm_states()  # Get initial LSTM states (if using LSTM)
+#
+#     while not buffer.is_full():
+#         with torch.no_grad():  # Don't track gradients during gameplay
+#             # Add a sequence dimension for the single frame [Batch=1, Time=1, Features]
+#             state_inpt = torch.tensor(state, dtype=torch.float32).unsqueeze(0)  # Add batch dimension
+#             action_logits, pos_logits, value_estimate , (next_h_s, next_c_s) = model(state_inpt, h_s, c_s)
+#
+#             # Remove the batch/time dimensions for sampling
+#             action_logits = action_logits.squeeze()
+#             pos_logits = pos_logits.squeeze()
+#             value_estimate = value_estimate.squeeze()
+#
+#             dist_action = torch.distributions.Categorical(logits=action_logits).sample()
+#             dist_pos = torch.distributions.Normal(loc=pos_logits, scale=1.0).sample()
+#
+#             log_action = dist_action.log_prob(dist_action)
+#             log_pos = dist_pos.log_prob(dist_pos).sum(dim=-1)  # Total log prob for the combined action
+#             log_prob = log_action + log_pos
+#
+#             action = (dist_action.item(), dist_pos[0].item(), dist_pos[1].item())
+#         # Step the environment and get the RAW reward
+#         # verify env.step((dist_action.cpu().numpy(), dist_pos.cpu().numpy()))
+#         next_state, reward, done = env.step(action)  # Assuming your env can take the action in this format
+#
+#         # Store in PPO_Buffer
+#         buffer.add(state, action, log_prob, reward, value_estimate, h_s, c_s, done)
+#         state = next_state
+#         h_s , c_s = next_h_s, next_c_s  # Update LSTM states for the next step
+#
+#         if done:
+#             state = env.reset()
+#             h_s , c_s = model.get_initial_lstm_states()  # Reset LSTM states for new episode
 
 
     # PHASE 2: Advantage Estimation (GAE)
     # Get the value of the final state to bootstrap GAE
-    with torch.no_grad():
-        next_state_input = torch.tensor(next_state).unsqueeze(0).unsqueeze(0)
-        _,_,next_value,_ = model(next_state_input, h_s, c_s)  # Get value estimate for the final state
-        next_value = next_value.squeeze()
-    buffer.compute_gae(next_value)
+    # with torch.no_grad():
+    #     next_state_input = torch.tensor(next_state).unsqueeze(0).unsqueeze(0)
+    #     _,_,next_value,_ = model(next_state_input, h_s, c_s)  # Get value estimate for the final state
+    #     next_value = next_value.squeeze()
+    # buffer.compute_gae(next_value)
+    #
+    #
+    # # PHASE 3: Network Updates
+    # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # model.to(device)
+    # model.train()  # Switch back to training mode to update weights
+    #
+    # for epoch in range(epochs):
+    #     # Yield mini-batches of size 64
+    #     for batch in buffer.generate_sequential_batches(sequence_length=batch_size, device=device):
+    #         state_seq = batch.states.unsqueeze(0)  # Add batch dimension for LSTM input
+    #         actor_loss , critic_loss = actor_critic_update(model=model,
+    #                                                        optimizer=optimizer,
+    #                                                        states=state_seq,
+    #                                                        actions=batch.actions,
+    #                                                        returns=batch.returns,
+    #                                                        old_log_probs=batch.old_log_probs,
+    #                                                        advantages=batch.advantages,
+    #                                                        h_s=batch.h_s,
+    #                                                        c_s=batch.c_s,
+    #                                                        vf=0.5,
+    #                                                        ent_coef=0.01,
+    #                                                        epsilon=0.2)
+    #         print(f"Epoch {epoch+1}/{epochs}, Actor Loss: {actor_loss:.4f}, Critic Loss: {critic_loss:.4f}")
+    #
+    # # Clear the buffer for the next game
+    # buffer.reset_buffer()
 
-
-    # PHASE 3: Network Updates
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model.to(device)
-    model.train()  # Switch back to training mode to update weights
-
-    for epoch in range(epochs):
-        # Yield mini-batches of size 64
-        for batch in buffer.generate_sequential_batches(sequence_length=batch_size, device=device):
-            state_seq = batch.states.unsqueeze(0)  # Add batch dimension for LSTM input
-            actor_loss , critic_loss = actor_critic_update(model=model,
-                                                           optimizer=optimizer,
-                                                           states=state_seq,
-                                                           actions=batch.actions,
-                                                           returns=batch.returns,
-                                                           old_log_probs=batch.old_log_probs,
-                                                           advantages=batch.advantages,
-                                                           h_s=batch.h_s,
-                                                           c_s=batch.c_s,
-                                                           vf=0.5,
-                                                           ent_coef=0.01,
-                                                           epsilon=0.2)
-            print(f"Epoch {epoch+1}/{epochs}, Actor Loss: {actor_loss:.4f}, Critic Loss: {critic_loss:.4f}")
-
-    # Clear the buffer for the next game
-    buffer.reset_buffer()
 

@@ -317,6 +317,6 @@ def Agent(model_name, state=True):
             save_agent_global_state(Agent_global_state)
 
 
-if __name__ == "__main__":
-    Agent(model_name="LSTM", state=True)
+# if __name__ == "__main__":
+#     Agent(model_name="LSTM", state=True)
 

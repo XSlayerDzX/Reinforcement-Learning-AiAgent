@@ -42,40 +42,58 @@ def compute_reward(match_data_set):
     return df
 
 
-def compute_step_reward(current_frame, next_frame):
+def compute_step_reward(prev_obs, curr_obs):
+    """
+    Compute a scalar reward from previous and current observations.
+    Works with dict, pd.Series, or single-row pd.DataFrame.
+    Reward logic: count features that went from 1 -> 0.
+      - if an `enemy_` feature dropped: +1 per drop
+      - if an `ally_` feature dropped: -1 per drop
+    Returns float.
+    """
+    if prev_obs is None or curr_obs is None:
+        return 0.0
+
+    def to_series(o):
+        if isinstance(o, pd.DataFrame):
+            if o.shape[0] >= 1:
+                return o.iloc[0]
+            return pd.Series(dtype="int64")
+        if isinstance(o, pd.Series):
+            return o
+        if isinstance(o, dict):
+            return pd.Series(o)
+        return pd.Series(dtype="int64")
+
+    prev_s = to_series(prev_obs)
+    curr_s = to_series(curr_obs)
+
+    if prev_s.empty or curr_s.empty:
+        return 0.0
+
+    common = prev_s.index.intersection(curr_s.index)
+    if common.empty:
+        return 0.0
+
+    prev_aligned = prev_s[common].fillna(0).astype(int)
+    curr_aligned = curr_s[common].fillna(0).astype(int)
+
+    diff = prev_aligned - curr_aligned  # positive means value decreased
     reward = 0.0
 
-    # Identify lists of entities based on the keys
-    enemy_troops = [col for col in current_frame.keys() if str(col).endswith("_enemy")]
-    ally_towers = ["ally_prince_tower_left", "ally_prince_tower_right", "ally_king_tower"]
-    enemy_towers = ["enemy_prince_tower_left", "enemy_prince_tower_right", "enemy_king_tower"]
+    for col, d in diff.items():
+        if d <= 0:
+            continue
+        # positive decrease happened
+        if str(col).startswith("enemy_"):
+            reward += float(d)
+        elif str(col).startswith("ally_"):
+            reward -= float(d)
+        else:
+            # neutral/unknown features: treat decreases as negative to agent (optional)
+            reward += 0.0
 
-    # 1. Killed and Unkilled Enemy Troops
-    for troop in enemy_troops:
-        curr_val = current_frame.get(troop, 0)
-        next_val = next_frame.get(troop, 0)
-
-        if curr_val == 1 and next_val == 0:
-            reward += 0.15
-        elif curr_val == 1 and next_val == 1:
-            reward -= 0.01
-
-    # 2. Destroyed Ally Towers
-    for tower in ally_towers:
-        if current_frame.get(tower, 0) == 1 and next_frame.get(tower, 0) == 0:
-            reward -= 0.4
-
-    # 3. Destroyed Enemy Towers
-    for tower in enemy_towers:
-        if current_frame.get(tower, 0) == 1 and next_frame.get(tower, 0) == 0:
-            reward += 0.75
-
-    #4 slight negative reward for each step to encourage shorter games
-    reward -= 0.01
-    # tayeb task: checking for who won based on pixels would go here
-    ## This would require additional logic to analyze the pixel data and determine the winner, which is not implemented in this function.
-
-    return reward
+    return float(reward)
 
 
 

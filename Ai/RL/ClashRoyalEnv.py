@@ -1,12 +1,12 @@
 from time import sleep
-
+import traceback
 import pyautogui as pya
 import pandas as pd
 from debugpy.common.timestamp import current
 
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Create_DataSet import Create_Dataset_Row
-from Ai.Agent.Agent_main import react_agent,ACTION_ID_TO_NAME,get_slot_for_action
+from Ai.Agent.Agent_main import react_agent, ACTION_ID_TO_NAME, get_slot_for_action
 from Reward_System import compute_step_reward
 from Ai.check_status import check_match_status
 
@@ -14,102 +14,186 @@ from Ai.check_status import check_match_status
 
 
 
-
 def Observation(id=0, match_id=0):
-    current_frame = Frame_Handler()
-    current_slots = {}
+    print(f"[DEBUG] Observation called with id={id}, match_id={match_id}")
+    try:
+        current_frame = Frame_Handler()
+        print(f"[DEBUG] Frame captured successfully, type: {type(current_frame)}")
+    except Exception as e:
+        print(f"[ERROR] Failed to capture frame: {e}")
+        traceback.print_exc()
+        return None, None
+
     if current_frame is None:
-        return None
-    # Process the frame to extract game state information
-    row_dict = Create_Dataset_Row(current_frame, id, match_id)  # Example IDs
+        print("[DEBUG] current_frame is None, returning None")
+        return None, None
+
+    current_slots = {}
+    try:
+        # Process the frame to extract game state information
+        row_dict = Create_Dataset_Row(current_frame, id, match_id)
+        print(f"[DEBUG] Dataset row created successfully, keys: {list(row_dict.keys()) if row_dict else 'None'}")
+    except Exception as e:
+        print(f"[ERROR] Failed to create dataset row: {e}")
+        traceback.print_exc()
+        row_dict = None
+
     if row_dict:
-        current_slots = {
-            "slot_1": row_dict["slot_1"],
-            "slot_2": row_dict["slot_2"],
-            "slot_3": row_dict["slot_3"],
-            "slot_4": row_dict["slot_4"],
-        }
-        return row_dict , current_slots
+        try:
+            current_slots = {
+                "slot_1": row_dict["slot_1"],
+                "slot_2": row_dict["slot_2"],
+                "slot_3": row_dict["slot_3"],
+                "slot_4": row_dict["slot_4"],
+            }
+            print(f"[DEBUG] Slots extracted: {current_slots}")
+            return row_dict, current_slots
+        except Exception as e:
+            print(f"[ERROR] Failed to extract slots: {e}")
+            traceback.print_exc()
     else:
         #check if the match is done
-        state = check_match_status(current_frame)
-        if state == "win" or state == "loss":
-            return state, None
-        else:
+        try:
+            state = check_match_status(current_frame)
+            print(f"[DEBUG] Match status checked: {state}")
+            if state == "win" or state == "loss":
+                return state, None
+            else:
+                return None, None
+        except Exception as e:
+            print(f"[ERROR] Failed to check match status: {e}")
+            traceback.print_exc()
             return None, None
 
 
 class ClashRoyalEnv:
-    def __init__(self,step_delay= 0.5, max_steps= 300, reward_win= 100, reward_lose= -100, reward_draw= 0):
+    """Environment wrapper for the Clash Royale agent."""
+
+    def __init__(self, step_delay=0.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0):
+        print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={max_steps}")
         self.step_delay = step_delay
         self.max_steps = max_steps
         self.reward_win = reward_win
         self.reward_lose = reward_lose
         self.reward_draw = reward_draw
+
         self.current_step = 0
         self.done = False
         self.prev_obs = None
-        self.next_obs = None
+        self.obs = None
+        self.current_slots = {}
+        # ensure these exist to avoid AttributeError when calling Observation(...)
+        self.id = 0
+        self.match_id = 0
+        print("[DEBUG] ClashRoyalEnv initialized successfully")
+
+    def reset(self, max_attempts=30, wait_between=1.0):
+        """
+        Reset environment and wait for initial observation.
+        Returns: (observation, slots) where observation is a pandas.DataFrame or None,
+        and slots is a dict or None on failure.
+        Side-effect: updates self.current_slots and self.obs.
+        """
+        print("[DEBUG] reset() called")
+        self.current_step = 0
+        self.done = False
+        self.prev_obs = None
         self.obs = None
         self.current_slots = {}
 
-    def reset(self):
+        attempt = 0
+        while attempt < max_attempts:
+            print(f"[DEBUG] Waiting for initial observation... (attempt {attempt + 1})")
+            try:
+                row, slots = Observation(self.id, self.match_id)
+            except Exception as e:
+                print(f"[ERROR] Observation() raised: {e}")
+                traceback.print_exc()
+                row, slots = None, None
 
-        windows = pya.getWindowsWithTitle("BlueStacks App Player 4") ## change this if the title changes
-        if not windows or windows[0].isActive == False:
-            print("Please open the BlueStacks window and start the game.")
-            return
+            if isinstance(row, str) and row in ("win", "loss"):
+                print(f"[DEBUG] Observation returned terminal status {row} during reset, retrying...")
+            elif row:
+                try:
+                    df = pd.DataFrame([row])
+                    self.obs = df
+                    self.current_slots = slots or {}
+                    print(f"[DEBUG] Initial observation obtained, shape: {self.obs.shape}, slots: {self.current_slots}")
+                    # Return both observation and slots so callers can unpack two values
+                    return self.obs, self.current_slots
+                except Exception as e:
+                    print(f"[ERROR] converting observation to DataFrame: {e}")
+                    traceback.print_exc()
+                    # return consistent tuple on conversion failure
+                    return None, None
+            else:
+                # no valid observation yet
+                sleep(wait_between)
 
-        self.current_step = 0
-        self.done = False
-        self.prev_obs = None
-        self.next_obs = None
-        self.current_slots = {}
-        # Reset the game state here (e.g., start a new match)
-        while self.obs is None: ## wait until the game state is ready
-            self.obs, self.current_slots = Observation(self.current_step)
-            sleep(0.5) ## wait for the game to update
-        self.obs = pd.DataFrame([self.obs])
-        return self.obs
+            attempt += 1
 
+        print("[ERROR] Failed to get initial observation after retries")
+        return None, None
 
-    def step(self, action,pos_x=None, pos_y=None):
-        if self.done:
-            raise Exception("Episode is done. Please reset the environment.")
+    def step(self, action, pos_x, pos_y, current_slots=None):
+        """
+        Execute action and return a 4-tuple: (next_obs, reward, done, slots)
+        next_obs: pd.DataFrame or None or status string
+        reward: float
+        done: bool
+        slots: dict (may be {} or None)
+        """
+        try:
+            slots_to_use = current_slots if current_slots is not None else getattr(self, "current_slots", {})
+            try:
+                react_agent(action, pos_x, pos_y, slots_to_use)
+            except TypeError:
+                # fallback if react_agent doesn't accept slots argument
+                try:
+                    react_agent(action, pos_x, pos_y)
+                except Exception:
+                    pass
 
-        # Execute the action (e.g., simulate a tap or card placement)
-        react_agent(action,pos_x,pos_y,current_slots=self.current_slots)
-        self.prev_obs = self.obs.copy() if self.obs is not None else None
+            self.prev_obs = self.obs
+            sleep(self.step_delay)
 
-        # Wait for the game state to update
-        pya.sleep(self.step_delay)
+            obs_raw, slots = Observation(getattr(self, "id", 0), getattr(self, "match_id", 0))
+            self.current_slots = slots or getattr(self, "current_slots", {})
 
-        # Get the new observation
-        self.current_step += 1
-        self.obs, self.current_slots = Observation(self.current_step)  ## Get the new observation and current slots after executing the action, this function will return None if the game state is not ready yet, so we need to wait until it returns a valid observation
-        while self.obs is None: ## wait until the game state is ready or until the check function for win or loss can be applied
-            self.obs, self.current_slots = Observation(self.current_step) ## Get the new observation and current slots after executing the action
-            sleep(0.5)
-        if self.obs == "win":
-            reward = self.reward_win
-            self.done = True
-            return self.obs, reward, self.done
-        elif self.obs == "loss":
-            reward = self.reward_lose
-            self.done = True
-            return self.obs, reward, self.done
-        self.obs = pd.DataFrame([self.obs]) ## Convert to DataFrame for easier processing
-        # Calculate reward based on the new observation and previous observation
-        reward = compute_step_reward(self.prev_obs.iloc[0], self.obs.iloc[0])
+            # handle status strings
+            if isinstance(obs_raw, str):
+                status = obs_raw.lower()
+                if status == "win":
+                    return obs_raw, float(self.reward_win), True, self.current_slots
+                if status == "loss":
+                    return obs_raw, float(self.reward_lose), True, self.current_slots
+                return obs_raw, 0.0, False, self.current_slots
 
-        # Update previous observation
-        self.next_obs = self.obs.copy()
+            if obs_raw is None:
+                return None, 0.0, False, self.current_slots
 
-        return self.next_obs, self.prev_obs,reward, self.done
+            # ensure DataFrame
+            try:
+                obs_df = obs_raw if isinstance(obs_raw, pd.DataFrame) else pd.DataFrame([obs_raw])
+                self.obs = obs_df
+            except Exception:
+                traceback.print_exc()
+                return None, 0.0, False, self.current_slots
 
+            # compute reward safely
+            reward = 0.0
+            done = False
+            try:
+                reward = float(compute_step_reward(self.prev_obs, self.obs) or 0.0)
+            except Exception as e:
+                print(f"[WARN] compute_step_reward failed: {e}")
+                traceback.print_exc()
+                reward = 0.0
 
+            return self.obs, reward, done, self.current_slots
 
-
-
-
+        except Exception as e:
+            print(f"[ERROR] step() failed: {e}")
+            traceback.print_exc()
+            return None, 0.0, True, None
 
