@@ -9,7 +9,7 @@
 Clash Royale is a real-time mobile strategy game where two players deploy troops and spells from a hand of cards to destroy each other's towers. Decisions must be made in seconds, card placement matters spatially, and resources (elixir) regenerate over time — making it a rich and non-trivial environment for an AI agent.
 
 This project builds a full autonomous agent that:
-- **Sees** the game through a YOLOv8 object detection model running on live BlueStacks screen captures
+- **Sees** the game through a custom Roboflow Inference Workflow running on live BlueStacks screen captures
 - **Understands** the game state (troops on field, towers standing, elixir, cards in hand) as a structured observation vector
 - **Decides** what card to play and where to place it using a deep LSTM policy network
 - **Acts** by simulating real mouse clicks on the BlueStacks window via `pyautogui`
@@ -33,7 +33,7 @@ This makes it a practical example of the full modern RL stack: perception, featu
 ```mermaid
 flowchart TD
     A[BlueStacks Screen Capture] --> B[Frame Handler\nStream_to_frame.py]
-    B --> C[YOLOv8 Object Detection\nRoboflow Models]
+    B --> C[Roboflow Inference Workflow\ndetect-count-and-visualize]
     C --> D[Create_Dataset_Row\nCreate_DataSet.py]
     D --> E[Observation DataFrame\n205 features]
     E --> F[Data Cleaning Pipeline\nData_Cleaning.py]
@@ -102,7 +102,7 @@ Reinforcement-Learning-AiAgent/
 │   │       ├── rollouts.json           # One entry per rollout
 │   │       └── winrate.json            # Win/loss/draw history
 │   │
-│   ├── Roboflow/                       # YOLOv8 model wrappers (troops, towers, elixir, slots)
+│   ├── Roboflow/                       # Roboflow Inference SDK wrappers (troops, towers, elixir, slots)
 │   ├── ClashRoyalData.py               # ElixirCost, card metadata, feature schemas
 │   ├── Create_DataSet.py               # Builds observation row from a game frame
 │   ├── Data_Cleaning.py                # final_clean pipeline (slot, positions, avab)
@@ -242,7 +242,7 @@ Used to compute all-time and rolling win rates for dashboard display.
 pip install -r requirements.txt
 ```
 
-Key dependencies: `torch`, `ultralytics`, `pyautogui`, `opencv-python`, `pandas`, `numpy`, `roboflow`
+Key dependencies: `torch`, `pyautogui`, `opencv-python`, `pandas`, `numpy`, `inference-sdk`, `roboflow`
 
 ---
 
@@ -257,11 +257,20 @@ pip install -r requirements.txt
 cp .env.example .env   # fill in your Roboflow API key
 ```
 
-### 2. Start BlueStacks
+### 2. Configure `.env`
+
+```
+ROBOFLOW_API_KEY=your_key_here
+ROBOFLOW_API_URL=http://localhost:9001
+ROBOFLOW_WORKSPACE=clashroyalbot-z9idj
+ROBOFLOW_WORKFLOW_STATE=detect-count-and-visualize
+```
+
+### 3. Start BlueStacks
 
 Open BlueStacks 4, launch Clash Royale, and navigate to the main menu. The agent will wait for a match to begin automatically.
 
-### 3. Run BC inference only (no training)
+### 4. Run BC inference only (no training)
 
 ```bash
 python -m Ai.Agent.Agent_main
@@ -269,7 +278,7 @@ python -m Ai.Agent.Agent_main
 
 Runs the original behavior-cloned LSTM agent without any PPO updates.
 
-### 4. Run PPO training
+### 5. Run PPO training
 
 ```bash
 python -m Ai.RL.PPO_Main
@@ -286,7 +295,7 @@ The training loop per run:
 5. Saves checkpoint and writes logs
 6. Repeats on next run
 
-### 5. Reset to BC weights
+### 6. Reset to BC weights
 
 ```bash
 del Ai\RL\ppo_model.pth
@@ -315,7 +324,7 @@ optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
 ## Notes
 
-- The YOLOv8 models (Roboflow) require a valid API key in `.env` for first-time download.
+- Detection is handled by a **custom Roboflow Inference Workflow** (`detect-count-and-visualize`) accessed via `InferenceHTTPClient` from the `inference-sdk` package. A valid `ROBOFLOW_API_KEY` in `.env` is required.
 - `temp_screens/` stores frame captures during inference and is not committed to git.
 - All grid coordinates use a **9x18 arena grid**. `grid_to_pixel()` and `bluestacks_to_global_coords()` in `coordinate_utils.py` handle the full conversion chain back to screen clicks.
 - The agent supports the **11-card pool** defined in `ClashRoyalData.py`. Adding new cards requires updating `ElixirCost`, `AVAIL_FEATURE_TO_ACTION_ID`, and retraining the BC model.
