@@ -1,6 +1,30 @@
 # Clash Royale RL Agent
 
-A full reinforcement learning pipeline that plays **Clash Royale** autonomously on a Windows PC via BlueStacks. The agent starts from a **Behavior Cloning (BC)** warm-start — an LSTM trained on human gameplay — and is then fine-tuned using **Proximal Policy Optimization (PPO)** with live game interaction.
+> **An end-to-end reinforcement learning system that learns to play Clash Royale autonomously — from raw screen pixels to mouse clicks — without any game API or memory hacking.**
+
+---
+
+## What is this project?
+
+Clash Royale is a real-time mobile strategy game where two players deploy troops and spells from a hand of cards to destroy each other's towers. Decisions must be made in seconds, card placement matters spatially, and resources (elixir) regenerate over time — making it a rich and non-trivial environment for an AI agent.
+
+This project builds a full autonomous agent that:
+- **Sees** the game through a YOLOv8 object detection model running on live BlueStacks screen captures
+- **Understands** the game state (troops on field, towers standing, elixir, cards in hand) as a structured observation vector
+- **Decides** what card to play and where to place it using a deep LSTM policy network
+- **Acts** by simulating real mouse clicks on the BlueStacks window via `pyautogui`
+
+### Why is this interesting?
+
+Most game AI research either uses privileged access (game memory, built-in APIs) or simplified environments. This agent operates purely from **visual perception + structured feature extraction**, the same information a human player has. It also tackles several challenges that make it technically non-trivial:
+
+- **Partial observability**: the agent only sees one frame at a time; the LSTM maintains temporal context across a 10-frame sliding window
+- **Mixed action space**: discrete card selection + continuous 2D placement on a spatial grid
+- **Legal action constraints**: cards can only be played if they are in hand and elixir is sufficient — requiring hard action masking at every step
+- **Sparse + delayed rewards**: most steps have near-zero reward; the game outcome only resolves after several minutes
+- **Warm-start from imitation**: rather than learning from scratch (which would take thousands of games), the policy is first trained via **Behavior Cloning** on recorded human gameplay, then fine-tuned with **PPO** to go beyond human demonstrations
+
+This makes it a practical example of the full modern RL stack: perception, feature engineering, imitation learning, and online policy optimization in a real-time game environment.
 
 ---
 
@@ -56,35 +80,35 @@ Reinforcement-Learning-AiAgent/
 │
 ├── Ai/
 │   ├── Agent/
-│   │   ├── Agent_main.py           # react_agent: executes actions via pyautogui
-│   │   ├── coordinate_utils.py     # grid -> BlueStacks -> Windows coord conversion
-│   │   └── LSTM_Inference_Pipeline.py
+│   │   ├── Agent_main.py               # react_agent: executes actions via pyautogui
+│   │   ├── coordinate_utils.py         # grid -> BlueStacks -> Windows coord conversion
+│   │   └── LSTM_Inference_Pipeline.py  # BC inference pipeline
 │   │
 │   ├── Behavior_Cloning/
-│   │   ├── LSTM_Model.py           # BC LSTM architecture
-│   │   ├── LSTM_Train.py           # BC training script
-│   │   ├── action_masking_config.py # Shared masking config (AVAIL_FEATURE_TO_ACTION_ID)
-│   │   └── lstm.pth                # Trained BC weights (warm-start)
+│   │   ├── LSTM_Model.py               # BC LSTM architecture
+│   │   ├── LSTM_Train.py               # BC training script
+│   │   ├── action_masking_config.py    # Shared masking config (AVAIL_FEATURE_TO_ACTION_ID)
+│   │   └── lstm.pth                    # Trained BC weights (warm-start)
 │   │
 │   ├── RL/
-│   │   ├── PPO_LSTM_Model.py       # Actor-critic LSTM (loads BC weights)
-│   │   ├── PPO_Trainer.py          # clean_obs, build_action_mask, actor_critic_update
-│   │   ├── PPO_Main.py             # Main training loop: collect -> update -> save
-│   │   ├── ClashRoyalEnv.py        # Gym-style environment wrapper
-│   │   ├── Reward_System.py        # compute_step_reward (tower HP diff)
-│   │   ├── PPO_Logger.py           # JSON logging: updates, rollouts, win rate
+│   │   ├── PPO_LSTM_Model.py           # Actor-critic LSTM (loads BC weights)
+│   │   ├── PPO_Trainer.py              # clean_obs, build_action_mask, actor_critic_update
+│   │   ├── PPO_Main.py                 # Main loop: collect -> update -> save
+│   │   ├── ClashRoyalEnv.py            # Gym-style environment wrapper
+│   │   ├── Reward_System.py            # compute_step_reward (tower presence diff)
+│   │   ├── PPO_Logger.py               # JSON logging: updates, rollouts, win rate
 │   │   └── logs/
-│   │       ├── updates.json        # One entry per training run
-│   │       ├── rollouts.json       # One entry per rollout
-│   │       └── winrate.json        # Win/loss/draw history
+│   │       ├── updates.json            # One entry per training run
+│   │       ├── rollouts.json           # One entry per rollout
+│   │       └── winrate.json            # Win/loss/draw history
 │   │
-│   ├── Roboflow/                   # YOLOv8 model wrappers for game detection
-│   ├── ClashRoyalData.py           # ElixirCost, card metadata, feature schemas
-│   ├── Create_DataSet.py           # Builds observation row from a game frame
-│   ├── Data_Cleaning.py            # final_clean pipeline (slot, positions, avab)
-│   ├── Stream_to_frame.py          # Captures BlueStacks frame to temp PNG
-│   ├── check_status.py             # Win/loss detection from screen
-└─── State_Tracker.py
+│   ├── Roboflow/                       # YOLOv8 model wrappers (troops, towers, elixir, slots)
+│   ├── ClashRoyalData.py               # ElixirCost, card metadata, feature schemas
+│   ├── Create_DataSet.py               # Builds observation row from a game frame
+│   ├── Data_Cleaning.py                # final_clean pipeline (slot, positions, avab)
+│   ├── Stream_to_frame.py              # Captures BlueStacks frame to temp PNG
+│   ├── check_status.py                 # Win/loss detection from screen
+│   └── State_Tracker.py
 │
 ├── requirements.txt
 ├── .env.example
@@ -95,17 +119,22 @@ Reinforcement-Learning-AiAgent/
 
 ## Observation Space
 
-Each game frame is processed into a **205-feature vector**:
+Each game frame is processed by `Create_DataSet.py` into a structured feature dict, then cleaned by `Data_Cleaning.py` into a **205-feature numeric vector**:
 
-| Feature group | Description |
-|---|---|
-| `slot_1..4` | Cards currently in hand (cleaned to card availability flags) |
-| `Elixir` | Current elixir count (0–10) |
-| `ally/enemy tower HP` | 6 tower health values |
-| `{troop}_ally/enemy` | Presence flag for each of 11 troop types per side |
-| `{troop}_ally/enemy_x/y` | Grid position (9×18 grid) of each troop |
-| `{troop}_ally_enemy_{troop}_d` | 11×11 pairwise distance matrix between ally and enemy troops |
-| `{card}_avab` | Binary: can this card be played right now (in hand + enough elixir) |
+| Feature group | Type | Description |
+|---|---|---|
+| `slot_1..4` | string (cleaned away) | Cards currently in hand — used to compute `*_avab` flags, then dropped |
+| `Elixir` | int 0–10 | Current elixir count |
+| `ally_prince_tower_left/right` | binary 0/1 | Whether the ally princess tower is still standing |
+| `ally_king_tower` | binary 0/1 | Whether the ally king tower is still standing |
+| `enemy_prince_tower_left/right` | binary 0/1 | Whether the enemy princess tower is still standing |
+| `enemy_king_tower` | binary 0/1 | Whether the enemy king tower is still standing |
+| `{troop}_ally/enemy` | binary 0/1 | Whether this troop type is currently on the field |
+| `{troop}_ally/enemy_x/y` | grid int | Position on the 9×18 arena grid (converted from pixel coords) |
+| `{ally}_ally_enemy_{enemy}_d` | float | Euclidean pixel distance between each ally-enemy troop pair (11×11 = 121 values). Set to -1 if either troop is absent |
+| `{card}_avab` | binary 0/1 | Whether this card can be played right now (in hand AND elixir >= cost) |
+
+> **Tower features are binary presence flags, not HP values.** `1` = tower is standing, `0` = tower has been destroyed. This is the only tower information available from visual detection.
 
 A sliding window of the last **10 frames** is stacked into a `[10, 205]` tensor as LSTM input.
 
@@ -129,27 +158,27 @@ A sliding window of the last **10 frames** is stacked into a `[10, 205]` tensor 
 | 11 | Play Goblin Cage |
 | 3, 8, 12 | Reserved / unmapped |
 
-Card actions are accompanied by a continuous `(grid_x, grid_y)` placement position, converted to a BlueStacks pixel coordinate and then to a Windows global screen coordinate before execution.
+Card actions are accompanied by a continuous `(grid_x, grid_y)` placement position sampled from a Normal distribution, converted through: **arena grid -> BlueStacks virtual pixels -> Windows global screen coords** before execution.
 
 ---
 
 ## Action Masking
 
-Three layers of masking are applied at every step to prevent illegal actions:
+Three layers prevent the agent from playing cards it cannot legally play:
 
-1. **Availability mask** — built from `*_avab` features in the cleaned observation. A card is only legal if it is in hand (`slot_1..4`) and `elixir >= card_cost`.
-2. **Elixir safety guard** — direct check: `current_elixir - 1 >= card_cost`. The `-1` buffer accounts for the elixir read being one tick behind the live game.
-3. **Force-wait fallback** — if after both checks a card action is still sampled illegally, `action_val` is replaced with `WAIT_ID = 0` before passing to `react_agent`.
+1. **Availability mask** — built from `*_avab` features. A card is legal only if it is currently in `slot_1..4` AND `elixir >= card_cost` (computed inside `card_avable()` in `Data_Cleaning.py`).
+2. **Elixir safety guard** — a direct check at sampling time: `current_elixir - 1 >= card_cost`. The `-1` buffer accounts for the elixir read being one tick behind the live game state.
+3. **Force-wait fallback** — if a card action passes both checks but is still unaffordable (edge case), `action_val` is replaced with `WAIT_ID = 0` before passing to `react_agent`.
 
-The same masks used during rollout collection are stored in the rollout dict and reapplied during the PPO update to keep the old and new policy distributions consistent.
+The same masks used during rollout collection are **stored in the rollout dict** and reapplied during the PPO update so that the old and new policy distributions are computed over identical legal action sets.
 
 ---
 
 ## Reward System
 
-Rewards are computed in `Reward_System.py` at every step:
+Rewards are computed in `Reward_System.py` at every step by comparing consecutive observations:
 
-- **Step reward**: difference in tower HP between consecutive observations. Enemy tower damage -> positive. Ally tower damage -> negative.
+- **Step reward**: tower presence diff between frames. If an enemy tower goes from `1` to `0` (destroyed) that step gets a large positive reward. If an ally tower is lost, negative reward.
 - **Terminal reward**: `+1` on win, `-1` on loss, `0` on draw (configured in `ClashRoyalEnv`).
 
 Returns-to-go are computed backwards with `gamma = 0.99` and advantage is `A_t = G_t - V(s_t)`.
@@ -168,8 +197,9 @@ L = L_policy + 0.5 x L_value + L_entropy
 - **Value loss**: MSE between predicted values and discounted returns
 - **Entropy bonus**: coefficient 0.01, encourages exploration
 - **Gradient clipping**: max norm 0.5
+- **Optimizer**: Adam with lr = 1e-4, state preserved across runs via checkpoint
 
-The LSTM shared body + actor head + critic head are all updated jointly.
+The LSTM shared body + actor head + critic head are all updated jointly in a single backward pass.
 
 ---
 
@@ -287,5 +317,6 @@ optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
 - The YOLOv8 models (Roboflow) require a valid API key in `.env` for first-time download.
 - `temp_screens/` stores frame captures during inference and is not committed to git.
-- All grid coordinates use a 9x18 arena grid. `grid_to_pixel()` and `bluestacks_to_global_coords()` in `coordinate_utils.py` handle the full conversion chain back to screen clicks.
-- The agent supports the 11-card pool defined in `ClashRoyalData.py`. Adding new cards requires updating `ElixirCost`, `AVAIL_FEATURE_TO_ACTION_ID`, and retraining the BC model.
+- All grid coordinates use a **9x18 arena grid**. `grid_to_pixel()` and `bluestacks_to_global_coords()` in `coordinate_utils.py` handle the full conversion chain back to screen clicks.
+- The agent supports the **11-card pool** defined in `ClashRoyalData.py`. Adding new cards requires updating `ElixirCost`, `AVAIL_FEATURE_TO_ACTION_ID`, and retraining the BC model.
+- Tower features are **binary (0/1)**, not HP percentages. The reward signal for tower damage is therefore sparse — it only fires when a tower is fully destroyed in a given step transition.
