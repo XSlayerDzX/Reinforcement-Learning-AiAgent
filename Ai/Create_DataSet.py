@@ -1,6 +1,4 @@
-#importthe screenshot module
-#-->
-#img_path = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
+# Imported by the dataset-building pipeline; screenshot paths should be passed in explicitly.
 from Ai import State_Tracker
 from Ai.Roboflow.StatePredictor import ExtractData
 

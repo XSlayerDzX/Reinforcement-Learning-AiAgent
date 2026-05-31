@@ -1,4 +1,5 @@
 from collections import deque
+from pathlib import Path
 from time import sleep
 
 from Ai.RL.PPO_Trainer import sequenece_buffering, build_action_mask_from_obs , compute_returns_and_advantages,actor_critic_update
@@ -17,6 +18,9 @@ from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 
 from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BC_WEIGHTS_PATH = PROJECT_ROOT / "Ai" / "Behavior_Cloning" / "lstm.pth"
+PPO_CHECKPOINT_PATH = PROJECT_ROOT / "Ai" / "RL" / "ppo_model.pth"
 
 
 ## here we will implement the main training loop for PPO, including interaction with the environment, collecting transitions,
@@ -135,7 +139,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                         bs_x,
                         bs_y,
                         bluestacks_resolution=(540, 960),
-                        window_title="BlueStacks App Player 4",
+                        window_title="BlueStacks App Player 1",
                     )
 
                 # === 4) Log probabilities from the masked distributions ===
@@ -150,7 +154,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 retry_attempts = 0
                 while next_state_raw is None and retry_attempts < 5:
                     print("[WARN] Step returned None, retrying after short delay...")
-                    sleep(0.5)
+                    sleep(1.5)
                     next_state_raw, reward, done, slots = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
                     retry_attempts += 1
 
@@ -222,13 +226,13 @@ def main():
             hidden_size=128,
             num_layers=2,
             num_actions=13,
-            pretrained_model_path=r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Behavior_Cloning\lstm.pth"
+            pretrained_model_path=str(BC_WEIGHTS_PATH)
         )
         opt = torch.optim.Adam(model.parameters(), lr=1e-4)
 
         # ── Resume from PPO checkpoint if it exists ──────────────────────────
         import os
-        ppo_save_path = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
+        ppo_save_path = str(PPO_CHECKPOINT_PATH)
 
         if os.path.exists(ppo_save_path):
             print("[DEBUG] PPO checkpoint found, resuming from saved weights...")
@@ -294,7 +298,7 @@ def main():
             log_winrate(outcome)
 
         # Save model
-        save_path = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
+        save_path = str(PPO_CHECKPOINT_PATH)
         torch.save({
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": opt.state_dict(),

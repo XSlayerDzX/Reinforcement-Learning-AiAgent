@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from datetime import datetime
 
 # Action ID -> human readable name for dashboard display
@@ -16,7 +17,8 @@ ACTION_ID_TO_NAME = {
     11: "goblin cage",
 }
 
-LOG_PATH = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\logs"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOG_PATH = PROJECT_ROOT / "Ai" / "RL" / "logs"
 
 def _decode_action_dist(action_counts: dict) -> dict:
     """Convert {action_id: count} -> {card_name: count} for dashboard readability."""
