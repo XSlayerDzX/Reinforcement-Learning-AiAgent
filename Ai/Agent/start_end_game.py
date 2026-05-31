@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, Union
 
 
+
 def load_template(path: Path):
     """Load an image template and return it.
 

@@ -37,8 +37,8 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         # Get dynamic coordinates
         rect = win32gui.GetWindowRect(hwnd)
         x = rect[0]
-        y = rect[1] + 35  # Title bar offset
-        w = rect[2] - x - 32
+        y = rect[1] + 40  # Title bar offset
+        w = rect[2] - x - 40
         h = rect[3] - y
 
         # Fix negative borders

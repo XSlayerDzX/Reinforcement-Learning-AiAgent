@@ -7,8 +7,6 @@ import sys
 import os
 from pathlib import Path
 import torch
-from collections import deque
-from time import sleep
 import io
 
 # ── Theme ────────────────────────────────────────────────────────────────────
@@ -290,13 +288,14 @@ class PPOApp(ctk.CTk):
         self._stop_btn.configure(state="disabled")
 
     def _on_training_done(self):
-        sys.stdout = sys.__stdout__
+        # stdout is already restored in _training_loop finally block
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
         self._set_status("● IDLE", "#888")
 
     # ── Training Loop (runs in background thread) ─────────────────────────────
     def _training_loop(self):
+        original_stdout = sys.stdout
         try:
             # ── Read settings from GUI ────────────────────────────────────────
             bc_path      = self._bc_path_var.get()
@@ -326,6 +325,7 @@ class PPOApp(ctk.CTk):
             from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
             from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
             from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
+            from Ai.RL.PPO_Main import collect_rollout
             import pandas as pd
 
             # ── Patch hyperparams into trainer module ─────────────────────────
@@ -357,6 +357,7 @@ class PPOApp(ctk.CTk):
                 ckpt = torch.load(ppo_path)
                 model.load_state_dict(ckpt["model_state_dict"])
                 opt.load_state_dict(ckpt["optimizer_state_dict"])
+                print("[GUI] Model and optimizer state restored successfully")
             else:
                 print("[GUI] Starting fresh from BC warm-start weights.")
 
@@ -372,8 +373,8 @@ class PPOApp(ctk.CTk):
                 print(f"[GUI] Run {run}{' / ' + str(num_runs) if not infinite else ' (infinite mode)'}")
                 print(f"{'='*50}")
 
-                # ── Collect rollouts ──────────────────────────────────────────
-                from Ai.RL.PPO_Main import collect_rollout
+                # ── Collect rollouts (uses same logic as PPO_Main.collect_rollout) ──
+                print("[GUI] Collecting rollouts…")
                 rollouts = collect_rollout(env, model, rollouts_to_collect=rollouts_n)
 
                 if not rollouts:
@@ -386,6 +387,7 @@ class PPOApp(ctk.CTk):
                     print(f"[GUI] Total reward: {sum(first.get('rewards', [])):.4f}")
 
                 # ── PPO update ────────────────────────────────────────────────
+                print("[GUI] Starting PPO update…")
                 update_id = get_next_update_id()
                 final_policy_loss = 0.0
                 final_value_loss  = 0.0
@@ -427,10 +429,11 @@ class PPOApp(ctk.CTk):
 
             print("[GUI] Training session ended.")
 
-        except Exception:
-            print("[GUI][ERROR] Unhandled exception in training loop:")
+        except Exception as e:
+            print(f"[GUI][ERROR] Unhandled exception in training loop:")
             traceback.print_exc()
         finally:
+            sys.stdout = original_stdout
             self.after(0, self._on_training_done)
 
 

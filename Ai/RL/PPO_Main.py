@@ -7,6 +7,8 @@ from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
 from Ai.ClashRoyalData import ElixirCost
 from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID
+from Ai.Agent.start_end_game import auto_play
+import Ai.Stream_to_frame
 
 import torch
 import pandas as pd
@@ -17,6 +19,7 @@ from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 
 from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
+from Ai.Stream_to_frame import Frame_Handler
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BC_WEIGHTS_PATH = PROJECT_ROOT / "Ai" / "Behavior_Cloning" / "lstm.pth"
@@ -44,7 +47,7 @@ def _ensure_dataframe(obs):
             return None
     return None
 
-def collect_rollout(env, model, rollouts_to_collect=1):
+def collect_rollout(env, model, rollouts_to_collect=2):
     rollouts = []
     window_buffer = deque(maxlen=10)
 
@@ -62,12 +65,29 @@ def collect_rollout(env, model, rollouts_to_collect=1):
         done = False
         slots = {}
         current_slots = {}
+        started = False
+        while not started:
+            frame, zone = Frame_Handler()
+            play = auto_play(frame, zone)
+            if play == "play":
+                started = True
+            sleep(2.5)
 
         state_raw, current_slots = env.reset()
+
+        # ── Retry env.reset() if it fails (game might be loading) ──────────────
+        reset_attempts = 0
+        while (state_raw is None or _ensure_dataframe(state_raw) is None) and reset_attempts < 5:
+            print(f"[WARN] env.reset() returned invalid state, retrying... (attempt {reset_attempts + 1}/5)")
+            sleep(2.0)
+            state_raw, current_slots = env.reset()
+            reset_attempts += 1
+
         state = _ensure_dataframe(state_raw)
         if state is None or "slot_1" not in state.columns:
-            print("Failed to get valid initial obs from env.reset(), aborting rollout")
-            return rollouts
+            print(
+                "Failed to get valid initial obs from env.reset() after retries, skipping this rollout and continuing...")
+            continue  # ← CRITICAL: continue to next rollout instead of return
 
         with torch.no_grad():
             while not done:
@@ -148,14 +168,15 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 log_prob = (log_prob_action + log_prob_pos).item()
 
                 # Step env with final discrete action + global screen coords
-                next_state_raw, reward, done, slots = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
+                next_state_raw, reward, done, slots, frame = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
+
 
                 # If step returned None, retry using the last valid raw state (state_raw)
                 retry_attempts = 0
-                while next_state_raw is None and retry_attempts < 5:
+                while next_state_raw is None and retry_attempts < 2:
                     print("[WARN] Step returned None, retrying after short delay...")
                     sleep(1.5)
-                    next_state_raw, reward, done, slots = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
+                    next_state_raw, reward, done, slots, frame = env.step(action_val, pos_x, pos_y, state_raw, current_slots)
                     retry_attempts += 1
 
                 # If env.step returns a terminal string status
@@ -164,6 +185,7 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                     done = True
                     reward = env.reward_win if next_state_raw.lower() == "win" else env.reward_lose if next_state_raw.lower() == "loss" else 0.0
                     next_state_raw = None
+
 
                 # Normalize next_state to DataFrame for downstream processing
                 next_state = _ensure_dataframe(next_state_raw)
@@ -187,6 +209,15 @@ def collect_rollout(env, model, rollouts_to_collect=1):
                 y.append(pos_y)
                 log_probs.append(log_prob)
                 rewards.append(reward)
+                while done:
+                    c_f, z = Frame_Handler()
+                    restart = auto_play(c_f, z)
+                    if restart == "ok":
+                        print("[INFO] Restarting game for next episode...")
+                        sleep(2)
+                        break
+                    sleep(1)
+
 
         r = {
             "windows": windows,
