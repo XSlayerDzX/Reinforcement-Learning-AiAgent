@@ -5,6 +5,7 @@ import threading
 import traceback
 import sys
 import os
+from pathlib import Path
 import torch
 from collections import deque
 from time import sleep
@@ -13,6 +14,9 @@ import io
 # ── Theme ────────────────────────────────────────────────────────────────────
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ── stdout redirect so training prints appear in the GUI log ─────────────────
@@ -157,10 +161,10 @@ class PPOApp(ctk.CTk):
         section("📁  Paths")
 
         self._bc_path_var = ctk.StringVar(
-            value=r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Behavior_Cloning\lstm.pth"
+            value=str(PROJECT_ROOT / "Ai" / "Behavior_Cloning" / "lstm.pth")
         )
         self._ppo_path_var = ctk.StringVar(
-            value=r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\RL\ppo_model.pth"
+            value=str(PROJECT_ROOT / "Ai" / "RL" / "ppo_model.pth")
         )
 
         def path_row(label, var):

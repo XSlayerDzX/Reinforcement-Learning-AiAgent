@@ -22,7 +22,7 @@ WORKFLOW = os.getenv("ROBOFLOW_WORKFLOW_STATE", "detect-count-and-visualize")
 if not API_KEY:
     raise ValueError("ROBOFLOW_API_KEY not found in environment variables. Please check your .env file.")
 
-IMG_PATH = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
+IMG_PATH = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 

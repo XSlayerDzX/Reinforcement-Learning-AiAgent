@@ -17,7 +17,7 @@ from Ai.check_status import check_match_status
 def Observation(id=0, match_id=0):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}")
     try:
-        current_frame = Frame_Handler(id)
+        current_frame, _ = Frame_Handler(id)
     except Exception as e:
         print(f"[ERROR] Failed to get current frame: {e}")
         traceback.print_exc()
@@ -69,7 +69,7 @@ def Observation(id=0, match_id=0):
 class ClashRoyalEnv:
     """Environment wrapper for the Clash Royale agent."""
 
-    def __init__(self, step_delay=0.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0):
+    def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0):
         print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={max_steps}")
         self.step_delay = step_delay
         self.max_steps = max_steps
