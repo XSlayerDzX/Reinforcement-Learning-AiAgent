@@ -66,11 +66,10 @@ def Create_Dataset_Row(imgpath,id,match_id):
     try:
         data = ExtractData(imgpath)
         if data is None:
-            print("Data extraction failed. Either the game ended or hasent started yet")
+            # print("Data extraction failed. Either the game ended or hasent started yet")
             return None
 
-        slots, troops_ally, troops_enemy, towers, elixir = ExtractData(imgpath)
-        #print(slots)
+        slots, troops_ally, troops_enemy, towers, elixir = data
     except Exception as e:
         print(f"Error extracting data from image: {e}")
         return None

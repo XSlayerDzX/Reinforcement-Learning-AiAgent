@@ -1,36 +1,41 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import filedialog, scrolledtext
+from tkinter import filedialog, scrolledtext, messagebox
 import threading
 import traceback
 import sys
 import os
 from pathlib import Path
-import torch
 import io
+import json
 
 # ── Theme ────────────────────────────────────────────────────────────────────
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if getattr(sys, 'frozen', False):
+    APP_ROOT = Path(sys._MEIPASS)
+    USER_ROOT = Path(sys.executable).parent
+else:
+    APP_ROOT = Path(__file__).resolve().parents[2]
+    USER_ROOT = APP_ROOT
 
 
-# ── stdout redirect so training prints appear in the GUI log ─────────────────
-class _StreamRedirect(io.TextIOBase):
-    def __init__(self, text_widget: scrolledtext.ScrolledText):
-        self._widget = text_widget
+# ── Logging Redirector ───────────────────────────────────────────────────────
+class _StreamRedirect:
+    def __init__(self, widget):
+        self.widget = widget
 
-    def write(self, msg: str):
-        self._widget.after(0, self._append, msg)
-        return len(msg)
+    def write(self, string):
+        # Must be thread-safe for background logging
+        self.widget.after(0, self._insert, string)
 
-    def _append(self, msg: str):
-        self._widget.configure(state="normal")
-        self._widget.insert(tk.END, msg)
-        self._widget.see(tk.END)
-        self._widget.configure(state="disabled")
+    def _insert(self, string):
+        self.widget.configure(state="normal")
+        self.widget.insert("end", string)
+        self.widget.see("end")
+        self.widget.configure(state="disabled")
 
     def flush(self):
         pass
@@ -46,6 +51,13 @@ class PPOApp(ctk.CTk):
         self._training_thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
         self._build_ui()
+        self._settings_file = USER_ROOT / "ppo_gui_settings.json"
+        self._load_settings()
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+    def _on_closing(self):
+        self._save_settings()
+        self.destroy()
 
     # ── UI Construction ───────────────────────────────────────────────────────
     def _build_ui(self):
@@ -159,10 +171,10 @@ class PPOApp(ctk.CTk):
         section("📁  Paths")
 
         self._bc_path_var = ctk.StringVar(
-            value=str(PROJECT_ROOT / "Ai" / "Behavior_Cloning" / "lstm.pth")
+            value=str(APP_ROOT / "Ai" / "Behavior_Cloning" / "lstm.pth")
         )
         self._ppo_path_var = ctk.StringVar(
-            value=str(PROJECT_ROOT / "Ai" / "RL" / "ppo_model.pth")
+            value=str(USER_ROOT / "ppo_model.pth")
         )
 
         def path_row(label, var):
@@ -181,10 +193,10 @@ class PPOApp(ctk.CTk):
         # ── Training loop ─────────────────────────────────────────────────────
         section("🔁  Training Loop")
 
-        self._num_runs_var = ctk.IntVar(value=10)
+        self._num_runs_var = ctk.StringVar(value="10")
         row("Training Runs", ctk.CTkEntry, textvariable=self._num_runs_var, width=80)
 
-        self._rollouts_var = ctk.IntVar(value=1)
+        self._rollouts_var = ctk.StringVar(value="1")
         row("Rollouts per Run", ctk.CTkEntry, textvariable=self._rollouts_var, width=80)
 
         self._infinite_var = ctk.BooleanVar(value=False)
@@ -197,10 +209,10 @@ class PPOApp(ctk.CTk):
         # ── Model hyperparams ─────────────────────────────────────────────────
         section("🧠  Model")
 
-        self._hidden_size_var = ctk.IntVar(value=128)
+        self._hidden_size_var = ctk.StringVar(value="128")
         row("Hidden Size", ctk.CTkEntry, textvariable=self._hidden_size_var, width=80)
 
-        self._num_layers_var = ctk.IntVar(value=2)
+        self._num_layers_var = ctk.StringVar(value="2")
         row("LSTM Layers", ctk.CTkEntry, textvariable=self._num_layers_var, width=80)
 
         # ── PPO hyperparams ───────────────────────────────────────────────────
@@ -236,6 +248,12 @@ class PPOApp(ctk.CTk):
         self._reward_lose_var = ctk.StringVar(value="-1.0")
         row("Reward Lose", ctk.CTkEntry, textvariable=self._reward_lose_var, width=80)
 
+        # ── ArenaBrain Integration ─────────────────────────────────────────────
+        section("🌐  ArenaBrain Dashboard")
+
+        self._api_key_var = ctk.StringVar(value="")
+        row("API Key", ctk.CTkEntry, textvariable=self._api_key_var, width=180, show="*")
+
         # ── Misc ───────────────────────────────────────────────────────────────
         section("🔧  Misc")
 
@@ -269,16 +287,89 @@ class PPOApp(ctk.CTk):
         self._log.see(tk.END)
         self._log.configure(state="disabled")
 
+    def _save_settings(self):
+        settings = {
+            "bc_path": self._bc_path_var.get(),
+            "ppo_path": self._ppo_path_var.get(),
+            "num_runs": self._num_runs_var.get(),
+            "rollouts": self._rollouts_var.get(),
+            "infinite": self._infinite_var.get(),
+            "hidden_size": self._hidden_size_var.get(),
+            "num_layers": self._num_layers_var.get(),
+            "lr": self._lr_var.get(),
+            "gamma": self._gamma_var.get(),
+            "clip_eps": self._clip_eps_var.get(),
+            "entropy": self._entropy_var.get(),
+            "vf_coef": self._vf_coef_var.get(),
+            "grad_clip": self._grad_clip_var.get(),
+            "bs_window": self._bs_window_var.get(),
+            "reward_win": self._reward_win_var.get(),
+            "reward_lose": self._reward_lose_var.get(),
+            "api_key": self._api_key_var.get(),
+            "reset_ppo": self._reset_ppo_var.get(),
+            "verbose": self._verbose_var.get()
+        }
+        try:
+            with open(self._settings_file, "w") as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            print(f"Failed to save settings: {e}")
+
+    def _load_settings(self):
+        if not self._settings_file.exists():
+            return
+        try:
+            with open(self._settings_file, "r") as f:
+                settings = json.load(f)
+            
+            # Helper to set if key exists
+            def s(var, key):
+                if key in settings:
+                    var.set(settings[key])
+            
+            s(self._bc_path_var, "bc_path")
+            s(self._ppo_path_var, "ppo_path")
+            s(self._num_runs_var, "num_runs")
+            s(self._rollouts_var, "rollouts")
+            s(self._infinite_var, "infinite")
+            s(self._hidden_size_var, "hidden_size")
+            s(self._num_layers_var, "num_layers")
+            s(self._lr_var, "lr")
+            s(self._gamma_var, "gamma")
+            s(self._clip_eps_var, "clip_eps")
+            s(self._entropy_var, "entropy")
+            s(self._vf_coef_var, "vf_coef")
+            s(self._grad_clip_var, "grad_clip")
+            s(self._bs_window_var, "bs_window")
+            s(self._reward_win_var, "reward_win")
+            s(self._reward_lose_var, "reward_lose")
+            s(self._api_key_var, "api_key")
+            s(self._reset_ppo_var, "reset_ppo")
+            s(self._verbose_var, "verbose")
+        except Exception as e:
+            print(f"Failed to load settings: {e}")
+
     # ── Start / Stop ──────────────────────────────────────────────────────────
     def _start_training(self):
         if self._training_thread and self._training_thread.is_alive():
             return
+        
+        self._save_settings()
+        
         self._stop_flag.clear()
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
         self._set_status("● RUNNING", "#66bb6a")
         # Redirect stdout -> log widget
         sys.stdout = _StreamRedirect(self._log)
+        
+        # Check API key before starting
+        if not self._api_key_var.get().strip():
+            # Warn but allow offline
+            if not messagebox.askyesno("Missing API Key", "No ArenaBrain API Key provided.\n\nDo you want to continue in Offline Mode?"):
+                self._on_training_done()
+                return
+
         self._training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self._training_thread.start()
 
@@ -300,11 +391,11 @@ class PPOApp(ctk.CTk):
             # ── Read settings from GUI ────────────────────────────────────────
             bc_path      = self._bc_path_var.get()
             ppo_path     = self._ppo_path_var.get()
-            num_runs     = self._num_runs_var.get()
-            rollouts_n   = self._rollouts_var.get()
+            num_runs     = int(self._num_runs_var.get() or 1)
+            rollouts_n   = int(self._rollouts_var.get() or 1)
             infinite     = self._infinite_var.get()
-            hidden_size  = self._hidden_size_var.get()
-            num_layers   = self._num_layers_var.get()
+            hidden_size  = int(self._hidden_size_var.get() or 128)
+            num_layers   = int(self._num_layers_var.get() or 2)
             lr           = float(self._lr_var.get())
             gamma        = float(self._gamma_var.get())
             clip_eps     = float(self._clip_eps_var.get())
@@ -313,8 +404,10 @@ class PPOApp(ctk.CTk):
             grad_clip    = float(self._grad_clip_var.get())
             ignore_ckpt  = self._reset_ppo_var.get()
             verbose      = self._verbose_var.get()
+            api_key      = self._api_key_var.get()
 
             # ── Lazy imports (keep GUI startup fast) ──────────────────────────
+            import torch
             from Ai.RL.PPO_Trainer import (
                 sequenece_buffering, build_action_mask_from_obs,
                 compute_returns_and_advantages, actor_critic_update,
@@ -327,6 +420,9 @@ class PPOApp(ctk.CTk):
             from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
             from Ai.RL.PPO_Main import collect_rollout
             import pandas as pd
+            if str(APP_ROOT) not in sys.path:
+                sys.path.append(str(APP_ROOT))
+            from arena_web_integration.arena_client import ArenaBrainClient
 
             # ── Patch hyperparams into trainer module ─────────────────────────
             import Ai.RL.PPO_Trainer as _trainer
@@ -338,7 +434,8 @@ class PPOApp(ctk.CTk):
 
             # ── Build env ─────────────────────────────────────────────────────
             print("[GUI] Initialising environment…")
-            env = ClashRoyalEnv()
+            bs_window    = self._bs_window_var.get()
+            env = ClashRoyalEnv(window_title=bs_window)
             print("[GUI] Environment ready.")
 
             # ── Build model ───────────────────────────────────────────────────
@@ -361,6 +458,21 @@ class PPOApp(ctk.CTk):
             else:
                 print("[GUI] Starting fresh from BC warm-start weights.")
 
+            # ── ArenaBrain Web Client ─────────────────────────────────────────
+            web_client = ArenaBrainClient(api_key=api_key)
+            if api_key.strip():
+                try:
+                    is_valid = web_client.validate()
+                    if not is_valid:
+                        self.after(0, lambda: messagebox.showerror("Invalid API Key", "The ArenaBrain API Key provided is invalid or inactive.\n\nTraining stopped."))
+                        return
+                    else:
+                        print("✅ API key validated.")
+                except Exception as e:
+                    print(f"⚠️ Could not connect to ArenaBrain API: {e}")
+                    self.after(0, lambda e=e: messagebox.showerror("API Connection Error", f"Could not connect to the cloud server.\n\n{e}\n\nTraining stopped."))
+                    return
+
             # ── Training loop ─────────────────────────────────────────────────
             run = 0
             while not self._stop_flag.is_set():
@@ -375,7 +487,13 @@ class PPOApp(ctk.CTk):
 
                 # ── Collect rollouts (uses same logic as PPO_Main.collect_rollout) ──
                 print("[GUI] Collecting rollouts…")
-                rollouts = collect_rollout(env, model, rollouts_to_collect=rollouts_n)
+                rollouts = collect_rollout(
+                    env, 
+                    model, 
+                    rollouts_to_collect=rollouts_n, 
+                    window_title=bs_window, 
+                    stop_flag=self._stop_flag
+                )
 
                 if not rollouts:
                     print("[GUI][WARN] No rollouts returned, skipping update.")
@@ -392,9 +510,11 @@ class PPOApp(ctk.CTk):
                 final_policy_loss = 0.0
                 final_value_loss  = 0.0
                 outcome = None
+                rollout_logs = []
 
                 for i, rollout in enumerate(rollouts):
-                    log_rollout(update_id, i, rollout)
+                    ro_entry = log_rollout(update_id, i, rollout)
+                    rollout_logs.append(ro_entry)
                     terminal_reward = rollout["rewards"][-1] if rollout["rewards"] else 0
                     if terminal_reward >= env.reward_win:
                         outcome = "win"
@@ -410,9 +530,13 @@ class PPOApp(ctk.CTk):
                     )
                     print(f"[GUI] Rollout {i} → Policy Loss: {final_policy_loss:.4f} | Value Loss: {final_value_loss:.4f}")
 
-                log_update(update_id, rollouts, final_policy_loss, final_value_loss, outcome)
+                web_client.push_rollouts(update_id, rollout_logs)
+                update_entry = log_update(update_id, rollouts, final_policy_loss, final_value_loss, outcome)
+                web_client.push_run(update_entry)
+
                 if outcome:
                     log_winrate(outcome)
+                    web_client.push_winrate(outcome)
                     color = "🟢" if outcome == "win" else "🔴" if outcome == "loss" else "🟡"
                     print(f"[GUI] Outcome: {color} {outcome.upper()}")
 
