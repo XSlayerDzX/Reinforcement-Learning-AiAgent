@@ -4,7 +4,7 @@ import mss
 import mss.tools
 import win32gui
 
-def Frame_Handler(count=0, temp_folder="temp_screens"):
+def Frame_Handler(count=0, temp_folder="temp_screens", window_title="BlueStacks App Player 1"):
     """
     Capture single frame from BlueStacks. Returns filename or None.
     """
@@ -14,7 +14,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
 
     with mss.mss() as sct:
         # Find BlueStacks window handle by title
-        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 1")
+        hwnd = win32gui.FindWindow(None, window_title)
 
         if not hwnd:
             # Fallback: partial search if the name changes

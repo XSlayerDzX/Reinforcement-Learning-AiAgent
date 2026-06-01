@@ -47,7 +47,7 @@ def _ensure_dataframe(obs):
             return None
     return None
 
-def collect_rollout(env, model, rollouts_to_collect=2):
+def collect_rollout(env, model, rollouts_to_collect=2, window_title="BlueStacks App Player 1", stop_flag=None):
     rollouts = []
     window_buffer = deque(maxlen=10)
 
@@ -67,7 +67,10 @@ def collect_rollout(env, model, rollouts_to_collect=2):
         current_slots = {}
         started = False
         while not started:
-            frame, zone = Frame_Handler()
+            if stop_flag and stop_flag.is_set():
+                print("[INFO] Stop flag set, aborting rollout collection.")
+                return rollouts
+            frame, zone = Frame_Handler(window_title=window_title)
             play = auto_play(frame, zone)
             if play == "play":
                 started = True
@@ -91,6 +94,9 @@ def collect_rollout(env, model, rollouts_to_collect=2):
 
         with torch.no_grad():
             while not done:
+                if stop_flag and stop_flag.is_set():
+                    print("[INFO] Stop flag set, ending rollout step collection.")
+                    break
                 # Build 10x205 window from the current raw obs (pd.DataFrame)
                 current_window = sequenece_buffering(state, window_buffer, 10, 205)
                 window_tensor = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
@@ -159,7 +165,7 @@ def collect_rollout(env, model, rollouts_to_collect=2):
                         bs_x,
                         bs_y,
                         bluestacks_resolution=(540, 960),
-                        window_title="BlueStacks App Player 1",
+                        window_title=window_title,
                     )
 
                 # === 4) Log probabilities from the masked distributions ===
@@ -210,7 +216,10 @@ def collect_rollout(env, model, rollouts_to_collect=2):
                 log_probs.append(log_prob)
                 rewards.append(reward)
                 while done:
-                    c_f, z = Frame_Handler()
+                    if stop_flag and stop_flag.is_set():
+                        print("[INFO] Stop flag set during end-of-game loop.")
+                        break
+                    c_f, z = Frame_Handler(window_title=window_title)
                     restart = auto_play(c_f, z)
                     if restart == "ok":
                         print("[INFO] Restarting game for next episode...")
