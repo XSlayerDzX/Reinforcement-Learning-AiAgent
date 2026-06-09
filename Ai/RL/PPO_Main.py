@@ -108,6 +108,74 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
     print(f"[{run_id}] Checkpoint saved -> {path}")
 
 
+def _navigate_to_game(templates, window_title, stop_flag=None):
+    """
+    Block until the training-camp game has been launched.
+
+    Navigation flow:
+        main menu  ->  click 'menu'  (battle button)
+                   ->  click 'training_camp'
+                   ->  click 'ok_training'  (the final OK / Play button)
+                   ->  game starts, function returns
+
+    auto_play() already clicks whatever it detects; we just need to give
+    the UI time to transition between screens and keep looping until we
+    see 'ok_training' being detected AND clicked.
+
+    Sleeps between steps:
+        None detected        -> 1.5 s  (keep polling)
+        menu clicked         -> 2.0 s  (wait for training-camp screen)
+        training_camp clicked-> 2.5 s  (wait for ok_training button)
+        ok_training clicked  -> 3.0 s  (wait for match to load) then return
+        ok (end screen)      -> 1.5 s  (unexpected here, keep polling)
+    """
+    print("[NAV] Waiting for game to start...")
+    tick = 0
+    while True:
+        if stop_flag and stop_flag.is_set():
+            return False
+
+        result = Frame_Handler(window_title=window_title)
+        if result is None:
+            print("[NAV] Frame_Handler returned None, retrying...")
+            sleep(1.5)
+            tick += 1
+            continue
+
+        # Frame_Handler returns (frame_path, monitor_dict)
+        frame_path, monitor = result
+        zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
+
+        detected = auto_play(frame_path, zone, templates)
+        tick += 1
+
+        if detected is None:
+            print(f"[NAV] tick={tick}  nothing matched — waiting...")
+            sleep(1.5)
+
+        elif detected == "menu":
+            print(f"[NAV] tick={tick}  'menu' clicked — waiting for training-camp screen...")
+            sleep(2.0)
+
+        elif detected == "training_camp":
+            print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...")
+            sleep(2.5)
+
+        elif detected == "ok_training":
+            print(f"[NAV] tick={tick}  'ok_training' clicked — game launching, waiting for match load...")
+            sleep(3.0)
+            return True   # game is starting
+
+        elif detected == "ok":
+            # end-of-game screen appeared unexpectedly before start
+            print(f"[NAV] tick={tick}  'ok' (end screen) detected unexpectedly — clicking and waiting...")
+            sleep(1.5)
+
+        else:
+            print(f"[NAV] tick={tick}  unknown detection '{detected}' — waiting...")
+            sleep(1.5)
+
+
 # ---------------------------------------------------------------------------
 # rollout collection
 # ---------------------------------------------------------------------------
@@ -137,17 +205,12 @@ def collect_rollout(
     log_probs, rewards, values, masks = [], [], [], []
     elixir_at_action = []   # elixir value at every non-wait step
 
-    done    = False
-    started = False
+    done = False
 
-    # Wait for game to be ready (ok_training = the "OK" button on the training-camp screen)
-    while not started:
-        if stop_flag and stop_flag.is_set():
-            return None, {}
-        frame, zone = Frame_Handler(window_title=window_title)
-        if auto_play(frame, zone, templates) == "ok_training":
-            started = True
-        sleep(2.5)
+    # --- Navigate through menu -> training_camp -> ok_training ---
+    ok = _navigate_to_game(templates, window_title, stop_flag=stop_flag)
+    if not ok:
+        return None, {}
 
     state_raw, current_slots = env.reset()
 
@@ -290,8 +353,15 @@ def collect_rollout(
             while done:
                 if stop_flag and stop_flag.is_set():
                     break
-                c_f, z = Frame_Handler(window_title=window_title)
-                if auto_play(c_f, z, templates) == "ok":
+                result = Frame_Handler(window_title=window_title)
+                if result is None:
+                    sleep(1)
+                    continue
+                c_f, mon = result
+                z = {"left": mon.get("left", 0), "top": mon.get("top", 0)}
+                end_detected = auto_play(c_f, z, templates)
+                print(f"[END] End-screen detection: {end_detected}")
+                if end_detected == "ok":
                     sleep(2)
                     break
                 sleep(1)
