@@ -65,7 +65,7 @@ class ClashRoyalEnv:
     """Environment wrapper for the Clash Royale agent."""
 
     def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0, window_title="BlueStacks App Player 1"):
-        print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={max_steps}, window_title={window_title}")
+        print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={step_delay}, window_title={window_title}")
         self.step_delay = step_delay
         self.max_steps = max_steps
         self.reward_win = reward_win
@@ -78,7 +78,6 @@ class ClashRoyalEnv:
         self.prev_obs = None
         self.obs = None
         self.current_slots = {}
-        # ensure these exist to avoid AttributeError when calling Observation(...)
         self.id = 0
         self.match_id = 0
         print("[DEBUG] ClashRoyalEnv initialized successfully")
@@ -86,9 +85,12 @@ class ClashRoyalEnv:
     def reset(self, max_attempts=30, wait_between=1.0):
         """
         Reset environment and wait for initial observation.
-        Returns: (observation, slots) where observation is a pandas.DataFrame or None,
-        and slots is a dict or None on failure.
-        Side-effect: updates self.current_slots, self.obs, and self.last_frame.
+        Returns: (observation, slots)
+
+        If Observation() returns a terminal status (win/loss) during reset it
+        means the end-of-game screen has not fully cleared yet.  We sleep 3 s
+        and retry instead of spinning immediately, so the UI has time to
+        transition back to the main menu before nav loop takes over.
         """
         print("[DEBUG] reset() called")
         self.current_step = 0
@@ -109,7 +111,9 @@ class ClashRoyalEnv:
                 row, slots, frame = None, None, None
 
             if isinstance(row, str) and row in ("win", "loss"):
-                print(f"[DEBUG] Observation returned terminal status {row} during reset, retrying...")
+                # End screen still visible — wait longer before retrying
+                print(f"[DEBUG] Observation returned terminal status '{row}' during reset — waiting 3 s for screen to clear...")
+                sleep(3.0)   # was no extra sleep — end screen needs time to dismiss
             elif row:
                 try:
                     df = pd.DataFrame([row])
@@ -138,12 +142,6 @@ class ClashRoyalEnv:
         """
         Execute action and return a 5-tuple:
         (next_obs, reward, done, slots, frame)
-
-        next_obs: pd.DataFrame or None or status string
-        reward: float
-        done: bool
-        slots: dict (may be {} or None)
-        frame: screenshot path returned by Frame_Handler / Observation
         """
         if state is None:
             print("[ERROR] ClashRoyalEnv.step() called with state None")

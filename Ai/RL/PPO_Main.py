@@ -108,6 +108,30 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
     print(f"[{run_id}] Checkpoint saved -> {path}")
 
 
+def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
+    """
+    After a game ends: poll until the 'ok' end-screen button is detected
+    and clicked, then wait 4 s for the main menu to fully load.
+    Returns immediately if 'ok' is not seen within timeout_ticks polls.
+    """
+    print("[END] Waiting for end-screen OK button...")
+    for tick in range(1, timeout_ticks + 1):
+        result = Frame_Handler(window_title=window_title)
+        if result is None:
+            sleep(1)
+            continue
+        frame_path, monitor = result
+        zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
+        detected = auto_play(frame_path, zone, templates)
+        print(f"[END] tick={tick}  detected={detected}")
+        if detected == "ok":
+            print("[END] OK clicked — waiting 4 s for menu to load...")
+            sleep(4.0)   # was 2 s — increased to let main menu fully render
+            return
+        sleep(1)
+    print("[END] Timed out waiting for end-screen OK — continuing anyway.")
+
+
 def _navigate_to_game(templates, window_title, stop_flag=None):
     """
     Block until the training-camp game has been launched.
@@ -118,16 +142,12 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
                    ->  click 'ok_training'  (the final OK / Play button)
                    ->  game starts, function returns
 
-    auto_play() already clicks whatever it detects; we just need to give
-    the UI time to transition between screens and keep looping until we
-    see 'ok_training' being detected AND clicked.
-
     Sleeps between steps:
         None detected        -> 1.5 s  (keep polling)
-        menu clicked         -> 2.0 s  (wait for training-camp screen)
-        training_camp clicked-> 2.5 s  (wait for ok_training button)
-        ok_training clicked  -> 3.0 s  (wait for match to load) then return
-        ok (end screen)      -> 1.5 s  (unexpected here, keep polling)
+        menu clicked         -> 2.5 s  (wait for training-camp screen)
+        training_camp clicked-> 3.0 s  (wait for ok_training button)
+        ok_training clicked  -> 4.0 s  (wait for match to load) then return
+        ok (end screen)      -> 2.0 s  (unexpected here, keep polling)
     """
     print("[NAV] Waiting for game to start...")
     tick = 0
@@ -142,7 +162,6 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
             tick += 1
             continue
 
-        # Frame_Handler returns (frame_path, monitor_dict)
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
 
@@ -155,21 +174,20 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
 
         elif detected == "menu":
             print(f"[NAV] tick={tick}  'menu' clicked — waiting for training-camp screen...")
-            sleep(2.0)
+            sleep(2.5)
 
         elif detected == "training_camp":
             print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...")
-            sleep(2.5)
+            sleep(3.0)
 
         elif detected == "ok_training":
             print(f"[NAV] tick={tick}  'ok_training' clicked — game launching, waiting for match load...")
-            sleep(3.0)
-            return True   # game is starting
+            sleep(4.0)
+            return True
 
         elif detected == "ok":
-            # end-of-game screen appeared unexpectedly before start
-            print(f"[NAV] tick={tick}  'ok' (end screen) detected unexpectedly — clicking and waiting...")
-            sleep(1.5)
+            print(f"[NAV] tick={tick}  'ok' (end screen) detected — clicking and waiting for menu...")
+            sleep(2.0)
 
         else:
             print(f"[NAV] tick={tick}  unknown detection '{detected}' — waiting...")
@@ -189,21 +207,12 @@ def collect_rollout(
     window_title=DEFAULT_WINDOW_TITLE,
     stop_flag=None,
 ):
-    """
-    Play one game and collect all transitions.
-    Returns the rollout dict (with returns + advantages added) plus
-    per-game diagnostic values needed for logging.
-
-    Args:
-        templates: preloaded template images dict (call _load_templates() once
-                   in main() and pass down here — never reload inside the loop).
-    """
     model.eval()
     window_buffer = deque(maxlen=WINDOW_SIZE)
 
     windows, actions, x_list, y_list = [], [], [], []
     log_probs, rewards, values, masks = [], [], [], []
-    elixir_at_action = []   # elixir value at every non-wait step
+    elixir_at_action = []
 
     done = False
 
@@ -238,11 +247,8 @@ def collect_rollout(
             action_logits = action_logits.squeeze(0)
             pos_logits    = pos_logits.squeeze(0)
 
-            # --- action mask ---
             if use_masking:
                 action_mask = build_action_mask_from_obs(state, num_actions=action_logits.shape[-1])
-
-                # Elixir guard
                 try:
                     current_elixir = float(state["Elixir"].iloc[0])
                 except (KeyError, ValueError, TypeError):
@@ -258,7 +264,6 @@ def collect_rollout(
                     if aid is not None and current_elixir < cost:
                         action_mask[aid] = False
             else:
-                # masking OFF: allow everything
                 action_mask    = torch.ones(action_logits.shape[-1], dtype=torch.bool)
                 current_elixir = 10.0
 
@@ -271,7 +276,6 @@ def collect_rollout(
             pos     = dist_pos.sample()
             action_val = action.item()
 
-            # Final elixir safety check (masking ON only)
             if use_masking:
                 ACTION_ID_TO_CARD = {
                     v: k.replace("_avab", "")
@@ -289,7 +293,6 @@ def collect_rollout(
                         action_val = WAIT_ID
                         action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
-            # Position
             if action_val == WAIT_ID:
                 pos_x, pos_y = -1.0, -1.0
             else:
@@ -301,7 +304,6 @@ def collect_rollout(
                     bluestacks_resolution=(540, 960),
                     window_title=window_title,
                 )
-                # Track elixir at non-wait actions
                 try:
                     elixir_at_action.append(float(state["Elixir"].iloc[0]))
                 except Exception:
@@ -349,22 +351,9 @@ def collect_rollout(
             log_probs.append(log_prob)
             rewards.append(reward)
 
-            # Wait for end-of-game screen to clear
-            while done:
-                if stop_flag and stop_flag.is_set():
-                    break
-                result = Frame_Handler(window_title=window_title)
-                if result is None:
-                    sleep(1)
-                    continue
-                c_f, mon = result
-                z = {"left": mon.get("left", 0), "top": mon.get("top", 0)}
-                end_detected = auto_play(c_f, z, templates)
-                print(f"[END] End-screen detection: {end_detected}")
-                if end_detected == "ok":
-                    sleep(2)
-                    break
-                sleep(1)
+            # Dismiss end-of-game screen before next game starts
+            if done:
+                _dismiss_end_screen(templates, window_title)
 
     rollout = {
         "windows":   windows,
@@ -378,7 +367,6 @@ def collect_rollout(
     }
     rollout = compute_returns_and_advantages(rollout, gamma=GAMMA)
 
-    # --- per-game diagnostics ---
     ep_len      = max(len(rewards), 1)
     wait_count  = actions.count(WAIT_ID)
     terminal_r  = rewards[-1] if rewards else 0.0
@@ -426,15 +414,12 @@ def main(
 
     torch.manual_seed(seed)
 
-    # --- load templates once for the entire run ---
     print(f"[{run_id}] Loading button templates...")
     templates = _load_templates()
     print(f"[{run_id}] Templates loaded: {list(templates.keys())}")
 
-    # --- environment ---
     env = ClashRoyalEnv()
 
-    # --- model ---
     pretrained_path = str(BC_CHECKPOINT) if use_pretrained else None
     model = PPO_LSTM_Model(
         input_size          = INPUT_SIZE,
@@ -445,7 +430,6 @@ def main(
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    # --- resume from latest checkpoint if one exists ---
     ckpt_dir   = ppo_checkpoint_dir(run_id)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     start_game = 1
@@ -460,7 +444,6 @@ def main(
         start_game = ckpt["game_id"] + 1
         print(f"[{run_id}] Resuming from game {start_game}")
 
-    # --- logger ---
     logger = RunLogger(
         log_dir = ppo_log_dir(run_id),
         run_id  = run_id,
@@ -469,7 +452,6 @@ def main(
 
     best_winrate = logger.best_win_rate
 
-    # --- training loop ---
     for game_id in range(start_game, n_games + 1):
         print(f"\n[{run_id}] —— Game {game_id}/{n_games} ——")
 
@@ -491,7 +473,6 @@ def main(
             print(f"[WARN] Empty rollout on game {game_id}, skipping update.")
             continue
 
-        # --- PPO update ---
         try:
             policy_loss, value_loss, clip_fraction, action_entropy = actor_critic_update(
                 actor_critic_network = model,
@@ -506,7 +487,6 @@ def main(
             traceback.print_exc()
             continue
 
-        # --- explained variance ---
         returns_arr = np.array(rollout["returns"])
         values_arr  = np.array(rollout["values"])
         residuals   = returns_arr - values_arr
@@ -514,7 +494,6 @@ def main(
             1 - np.var(residuals) / (np.var(returns_arr) + 1e-8)
         )
 
-        # --- log this game ---
         record = {
             "game_id":              game_id,
             "seed":                 seed,
@@ -560,7 +539,6 @@ def main(
             "mean_advantage":  diagnostics["mean_advantage"],
         })
 
-        # --- checkpoint rotation ---
         checkpoint_saved = False
 
         if game_id % CHECKPOINT_INTERVAL == 0:
@@ -582,7 +560,6 @@ def main(
         if checkpoint_saved:
             logger.log_ppo_update({"update_id": game_id, "checkpoint_saved": True})
 
-    # --- end of run ---
     _save_checkpoint(
         model, optimizer, run_id, n_games, logger.current_win_rate,
         path=ppo_checkpoint_path(run_id, n_games),
