@@ -13,6 +13,7 @@ Run:
 import argparse
 import traceback
 import sys
+import time
 from collections import deque
 from pathlib import Path
 from time import sleep
@@ -60,7 +61,7 @@ from Ai.models.run_config import (
 )
 
 # ---------------------------------------------------------------------------
-# Template paths (relative to the Agent folder)
+# Template paths
 # ---------------------------------------------------------------------------
 
 _AGENT_DIR = Path(__file__).resolve().parent.parent / "Agent"
@@ -74,7 +75,6 @@ _TEMPLATE_PATHS = {
 
 
 def _load_templates() -> dict:
-    """Load all button templates once and return as a dict."""
     return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
 
 
@@ -96,7 +96,6 @@ def _ensure_dataframe(obs):
 
 
 def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
-    """Save model + optimizer state with metadata."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "model_state_dict":     model.state_dict(),
@@ -109,11 +108,7 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
 
 
 def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
-    """
-    After a game ends: poll until the 'ok' end-screen button is detected
-    and clicked, then wait 4 s for the main menu to fully load.
-    Returns immediately if 'ok' is not seen within timeout_ticks polls.
-    """
+    """Click end-screen OK then wait 4 s for the main menu to fully load."""
     print("[END] Waiting for end-screen OK button...")
     for tick in range(1, timeout_ticks + 1):
         result = Frame_Handler(window_title=window_title)
@@ -126,29 +121,13 @@ def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
         print(f"[END] tick={tick}  detected={detected}")
         if detected == "ok":
             print("[END] OK clicked — waiting 4 s for menu to load...")
-            sleep(4.0)   # was 2 s — increased to let main menu fully render
+            sleep(4.0)
             return
         sleep(1)
     print("[END] Timed out waiting for end-screen OK — continuing anyway.")
 
 
 def _navigate_to_game(templates, window_title, stop_flag=None):
-    """
-    Block until the training-camp game has been launched.
-
-    Navigation flow:
-        main menu  ->  click 'menu'  (battle button)
-                   ->  click 'training_camp'
-                   ->  click 'ok_training'  (the final OK / Play button)
-                   ->  game starts, function returns
-
-    Sleeps between steps:
-        None detected        -> 1.5 s  (keep polling)
-        menu clicked         -> 2.5 s  (wait for training-camp screen)
-        training_camp clicked-> 3.0 s  (wait for ok_training button)
-        ok_training clicked  -> 4.0 s  (wait for match to load) then return
-        ok (end screen)      -> 2.0 s  (unexpected here, keep polling)
-    """
     print("[NAV] Waiting for game to start...")
     tick = 0
     while True:
@@ -164,31 +143,25 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
 
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
-
         detected = auto_play(frame_path, zone, templates)
         tick += 1
 
         if detected is None:
             print(f"[NAV] tick={tick}  nothing matched — waiting...")
             sleep(1.5)
-
         elif detected == "menu":
             print(f"[NAV] tick={tick}  'menu' clicked — waiting for training-camp screen...")
             sleep(2.5)
-
         elif detected == "training_camp":
             print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...")
             sleep(3.0)
-
         elif detected == "ok_training":
             print(f"[NAV] tick={tick}  'ok_training' clicked — game launching, waiting for match load...")
             sleep(4.0)
             return True
-
         elif detected == "ok":
             print(f"[NAV] tick={tick}  'ok' (end screen) detected — clicking and waiting for menu...")
             sleep(2.0)
-
         else:
             print(f"[NAV] tick={tick}  unknown detection '{detected}' — waiting...")
             sleep(1.5)
@@ -215,8 +188,8 @@ def collect_rollout(
     elixir_at_action = []
 
     done = False
+    t_start = time.time()   # wall-clock start for duration_seconds
 
-    # --- Navigate through menu -> training_camp -> ok_training ---
     ok = _navigate_to_game(templates, window_title, stop_flag=stop_flag)
     if not ok:
         return None, {}
@@ -272,8 +245,8 @@ def collect_rollout(
             dist_action = torch.distributions.Categorical(logits=masked_logits)
             dist_pos    = torch.distributions.Normal(loc=pos_logits, scale=1.0)
 
-            action  = dist_action.sample()
-            pos     = dist_pos.sample()
+            action     = dist_action.sample()
+            pos        = dist_pos.sample()
             action_val = action.item()
 
             if use_masking:
@@ -351,9 +324,10 @@ def collect_rollout(
             log_probs.append(log_prob)
             rewards.append(reward)
 
-            # Dismiss end-of-game screen before next game starts
             if done:
                 _dismiss_end_screen(templates, window_title)
+
+    duration = round(time.time() - t_start, 2)   # wall-clock duration
 
     rollout = {
         "windows":   windows,
@@ -367,9 +341,9 @@ def collect_rollout(
     }
     rollout = compute_returns_and_advantages(rollout, gamma=GAMMA)
 
-    ep_len      = max(len(rewards), 1)
-    wait_count  = actions.count(WAIT_ID)
-    terminal_r  = rewards[-1] if rewards else 0.0
+    ep_len     = max(len(rewards), 1)
+    wait_count = actions.count(WAIT_ID)
+    terminal_r = rewards[-1] if rewards else 0.0
     outcome = (
         "win"  if terminal_r >= env.reward_win  else
         "loss" if terminal_r <= env.reward_lose else
@@ -377,18 +351,15 @@ def collect_rollout(
     )
 
     diagnostics = {
-        "outcome":             outcome,
-        "episodic_return":     round(float(np.sum(rewards)), 4),
-        "episode_length":      ep_len,
-        "total_actions":       ep_len,
-        "wait_actions":        wait_count,
-        "wait_rate":           round(wait_count / ep_len, 4),
-        "mean_advantage":      round(float(np.mean(rollout["advantages"])), 4),
-        "std_advantage":       round(float(np.std(rollout["advantages"])),  4),
+        "outcome":               outcome,
+        "episodic_return":       round(float(np.sum(rewards)), 4),
+        "episode_length":        ep_len,
+        "total_actions":         ep_len,
+        "wait_actions":          wait_count,
+        "wait_rate":             round(wait_count / ep_len, 4),
         "mean_elixir_at_action": round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0,
-        "elixir_overflow_proxy": round(
-            sum(1 for r in rewards if r == 0.0) / ep_len, 4
-        ),
+        "elixir_overflow_proxy": round(sum(1 for r in rewards if r == 0.0) / ep_len, 4),
+        "duration_seconds":      duration,
     }
 
     return rollout, diagnostics
@@ -422,10 +393,10 @@ def main(
 
     pretrained_path = str(BC_CHECKPOINT) if use_pretrained else None
     model = PPO_LSTM_Model(
-        input_size          = INPUT_SIZE,
-        hidden_size         = HIDDEN_SIZE,
-        num_layers          = NUM_LAYERS,
-        num_actions         = NUM_ACTIONS,
+        input_size            = INPUT_SIZE,
+        hidden_size           = HIDDEN_SIZE,
+        num_layers            = NUM_LAYERS,
+        num_actions           = NUM_ACTIONS,
         pretrained_model_path = pretrained_path,
     )
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
@@ -495,24 +466,25 @@ def main(
         )
 
         record = {
-            "game_id":              game_id,
-            "seed":                 seed,
-            "outcome":              diagnostics["outcome"],
-            "episodic_return":      diagnostics["episodic_return"],
-            "episode_length":       diagnostics["episode_length"],
-            "total_actions":        diagnostics["total_actions"],
-            "wait_actions":         diagnostics["wait_actions"],
-            "wait_rate":            diagnostics["wait_rate"],
-            "mean_elixir_at_action":diagnostics["mean_elixir_at_action"],
-            "elixir_overflow_proxy":diagnostics["elixir_overflow_proxy"],
-            "policy_loss":          round(policy_loss,    6),
-            "value_loss":           round(value_loss,     6),
-            "explained_variance":   round(explained_var,  4),
-            "mean_advantage":       diagnostics["mean_advantage"],
-            "std_advantage":        diagnostics["std_advantage"],
-            "clip_fraction":        round(clip_fraction,  4),
-            "action_entropy":       round(action_entropy, 4),
-            "checkpoint_saved":     False,
+            "game_id":               game_id,
+            "seed":                  seed,
+            "outcome":               diagnostics["outcome"],
+            "episodic_return":       diagnostics["episodic_return"],
+            "episode_length":        diagnostics["episode_length"],
+            "total_actions":         diagnostics["total_actions"],
+            "wait_actions":          diagnostics["wait_actions"],
+            "wait_rate":             diagnostics["wait_rate"],
+            "mean_elixir_at_action": diagnostics["mean_elixir_at_action"],
+            "elixir_overflow_proxy": diagnostics["elixir_overflow_proxy"],
+            "policy_loss":           round(policy_loss,   6),
+            "value_loss":            round(value_loss,    6),
+            "explained_variance":    round(explained_var, 4),
+            "mean_advantage":        diagnostics["mean_advantage"],
+            "std_advantage":         diagnostics["std_advantage"],
+            "clip_fraction":         round(clip_fraction, 4),
+            "action_entropy":        round(action_entropy,4),
+            "duration_seconds":      diagnostics["duration_seconds"],
+            "checkpoint_saved":      False,
         }
 
         current_wr = logger.log_game(record)
@@ -586,33 +558,25 @@ def main(
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# CLI
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PPO training loop")
-    parser.add_argument("--run_id",        type=str,  required=True,
-                        choices=["BCPPO_s1","BCPPO_s2","PPOScratch_s1","PPOScratch_s2","BCPPO_NoMask_s1"],
-                        help="Run identifier")
-    parser.add_argument("--seed",          type=int,  default=1,
-                        help="Random seed")
-    parser.add_argument("--n_games",       type=int,  default=PPO_TRAINING_GAMES,
-                        help="Total training games")
-    parser.add_argument("--no_pretrain",   action="store_true",
-                        help="Disable BC warm-start (PPO from scratch)")
-    parser.add_argument("--no_mask",       action="store_true",
-                        help="Disable action masking")
-    parser.add_argument("--window",        type=str,  default=DEFAULT_WINDOW_TITLE,
-                        help="BlueStacks window title")
+    parser.add_argument("--run_id",      type=str, required=True,
+                        choices=["BCPPO_s1","BCPPO_s2","PPOScratch_s1","PPOScratch_s2","BCPPO_NoMask_s1"])
+    parser.add_argument("--seed",        type=int, default=1)
+    parser.add_argument("--n_games",     type=int, default=PPO_TRAINING_GAMES)
+    parser.add_argument("--no_pretrain", action="store_true")
+    parser.add_argument("--no_mask",     action="store_true")
+    parser.add_argument("--window",      type=str, default=DEFAULT_WINDOW_TITLE)
     args = parser.parse_args()
 
     use_pretrained = not args.no_pretrain
     use_masking    = not args.no_mask
 
-    if "Scratch" in args.run_id:
-        use_pretrained = False
-    if "NoMask" in args.run_id:
-        use_masking = False
+    if "Scratch"  in args.run_id: use_pretrained = False
+    if "NoMask"   in args.run_id: use_masking    = False
 
     main(
         run_id         = args.run_id,
