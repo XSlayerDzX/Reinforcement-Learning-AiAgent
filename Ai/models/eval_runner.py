@@ -6,7 +6,7 @@ Usage:
 
     run_evaluation(
         policy       = my_policy_instance,
-        policy_name  = "random",          # used for log and eval filenames
+        policy_name  = "random",
         seed         = 42,
         n_games      = EVAL_GAMES,
         log_dir      = baseline_log_dir("random"),
@@ -50,27 +50,10 @@ _TEMPLATE_PATHS = {
 
 
 def _load_templates() -> dict:
-    """Load all button templates once and return as a dict."""
     return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
 
 
 def _navigate_to_game(templates: dict, window_title: str, policy_name: str = "") -> bool:
-    """
-    Block until the training-camp game has been launched.
-
-    Navigation flow:
-        main menu  ->  click 'menu'  (battle button)
-                   ->  click 'training_camp'
-                   ->  click 'ok_training'  (the final OK / Play button)
-                   ->  game starts, function returns True
-
-    Sleeps:
-        None detected         -> 1.5 s
-        menu clicked          -> 2.0 s
-        training_camp clicked -> 2.5 s
-        ok_training clicked   -> 3.0 s  then return True
-        ok (end screen)       -> 1.5 s
-    """
     tag = f"[{policy_name}][NAV]" if policy_name else "[NAV]"
     print(f"{tag} Waiting for game to start...")
     tick = 0
@@ -84,44 +67,35 @@ def _navigate_to_game(templates: dict, window_title: str, policy_name: str = "")
 
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
-
         detected = auto_play(frame_path, zone, templates)
         tick += 1
 
         if detected is None:
             print(f"{tag} tick={tick}  nothing matched — waiting...")
             sleep(1.5)
-
         elif detected == "menu":
             print(f"{tag} tick={tick}  'menu' clicked — waiting for training-camp screen...")
-            sleep(2.0)
-
+            sleep(2.5)
         elif detected == "training_camp":
             print(f"{tag} tick={tick}  'training_camp' clicked — waiting for OK button...")
-            sleep(2.5)
-
+            sleep(3.0)
         elif detected == "ok_training":
             print(f"{tag} tick={tick}  'ok_training' clicked — game launching...")
-            sleep(3.0)
+            sleep(4.0)
             return True
-
         elif detected == "ok":
-            print(f"{tag} tick={tick}  'ok' (end screen) detected unexpectedly — clicking and waiting...")
-            sleep(1.5)
-
+            print(f"{tag} tick={tick}  'ok' (end screen) — clicking and waiting for menu...")
+            sleep(2.0)
         else:
-            print(f"{tag} tick={tick}  unknown detection '{detected}' — waiting...")
+            print(f"{tag} tick={tick}  unknown '{detected}' — waiting...")
             sleep(1.5)
 
 
-def _wait_for_end_screen(templates: dict, window_title: str, policy_name: str = "") -> None:
-    """
-    After a game ends, block until the 'ok' end-screen button is detected
-    and clicked, then wait for the screen to clear.
-    """
+def _dismiss_end_screen(templates: dict, window_title: str, policy_name: str = "", timeout_ticks: int = 20) -> None:
+    """Poll for the 'ok' end-screen button, click it, then wait 4 s for the menu to load."""
     tag = f"[{policy_name}][END]" if policy_name else "[END]"
-    tick = 0
-    while True:
+    print(f"{tag} Waiting for end-screen OK...")
+    for tick in range(1, timeout_ticks + 1):
         result = Frame_Handler(window_title=window_title)
         if result is None:
             sleep(1)
@@ -129,12 +103,13 @@ def _wait_for_end_screen(templates: dict, window_title: str, policy_name: str = 
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
         detected = auto_play(frame_path, zone, templates)
-        tick += 1
-        print(f"{tag} tick={tick}  end-screen detection: {detected}")
+        print(f"{tag} tick={tick}  detected={detected}")
         if detected == "ok":
-            sleep(2)
-            break
+            print(f"{tag} OK clicked — waiting 4 s for menu to load...")
+            sleep(4.0)
+            return
         sleep(1)
+    print(f"{tag} Timed out waiting for end-screen OK — continuing anyway.")
 
 
 # ── aggregate CSV columns ─────────────────────────────────────────────────────
@@ -142,7 +117,7 @@ def _wait_for_end_screen(templates: dict, window_title: str, policy_name: str = 
 AGGREGATE_COLUMNS = [
     "policy", "n_games", "seed",
     "win_rate_mean", "win_rate_std",
-    "return_mean", "return_std",
+    "outcome_return_mean",   # renamed: terminal-only (+1/-1/0)
     "episode_length_mean", "episode_length_std",
     "wait_rate_mean", "wait_rate_std",
     "elixir_overflow_mean",
@@ -160,27 +135,19 @@ def run_evaluation(
     window_title: str = DEFAULT_WINDOW_TITLE,
 ):
     """
-    Run `n_games` evaluation episodes and write:
-      - {log_dir}/training_log.csv     — per-game rows (via RunLogger)
-      - {log_dir}/winrate.json         — per-game win rate (via RunLogger)
-      - {log_dir}/run_summary.json     — aggregate summary (via RunLogger)
-      - {eval_dir}/eval_{policy_name}_games.csv      — per-game CSV copy
-      - {eval_dir}/eval_{policy_name}_aggregate.csv  — one-row aggregate
+    Run `n_games` evaluation episodes.
 
-    Args:
-        policy       : object with .select_action(obs, slots) -> dict
-                       and .reset() -> None
-        policy_name  : short name used in filenames and log output
-        seed         : integer seed (logged, not used to seed env)
-        log_dir      : where RunLogger writes its files
-        eval_dir     : where final eval CSVs are written
-        n_games      : number of games to play
-        window_title : BlueStacks window title
+    episodic_return is TERMINAL-ONLY for baselines:
+        +1  win
+        -1  loss
+         0  draw
+    Step rewards from env.step() are deliberately ignored —
+    random / heuristic / BC are not RL and should not accumulate
+    shaped mid-game rewards.
     """
     os.makedirs(log_dir,  exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
 
-    # Load templates once for the whole evaluation run
     print(f"[{policy_name}] Loading button templates...")
     templates = _load_templates()
     print(f"[{policy_name}] Templates loaded: {list(templates.keys())}")
@@ -195,7 +162,6 @@ def run_evaluation(
         print(f"[{policy_name}] Starting game {game_id}/{n_games}")
         print(f"{'='*60}")
 
-        # Navigate through menu -> training_camp -> ok_training
         _navigate_to_game(templates, window_title, policy_name=policy_name)
 
         policy.reset()
@@ -207,17 +173,14 @@ def run_evaluation(
             continue
 
         # ── episode loop ──────────────────────────────────────────────────────
-        done            = False
-        episode_return  = 0.0
-        episode_length  = 0
-        wait_actions    = 0
-        total_actions   = 0
-        overflow_steps  = 0   # steps where elixir >= 10
-
-        outcome = "draw"
+        done           = False
+        episode_length = 0
+        wait_actions   = 0
+        total_actions  = 0
+        overflow_steps = 0
+        outcome        = "draw"
 
         while not done:
-            # Get elixir for overflow tracking
             try:
                 elixir_val = float(obs["Elixir"].iloc[0]) if "Elixir" in obs.columns else 0.0
             except Exception:
@@ -225,7 +188,6 @@ def run_evaluation(
             if elixir_val >= 10.0:
                 overflow_steps += 1
 
-            # Policy selects action
             try:
                 decision = policy.select_action(obs, slots)
             except Exception as e:
@@ -236,33 +198,38 @@ def run_evaluation(
             pos_x     = decision.get("pos_x", -1.0)
             pos_y     = decision.get("pos_y", -1.0)
 
-            # Step environment
-            next_obs, reward, done, next_slots, _ = env.step(
+            # Step — we call env.step() for side-effects (action execution +
+            # done detection) but do NOT use the shaped step reward.
+            next_obs, _step_reward, done, next_slots, _ = env.step(
                 action_id, pos_x, pos_y, obs, slots
             )
 
-            episode_return += reward
             episode_length += 1
             total_actions  += 1
             if action_id == 0:
                 wait_actions += 1
 
-            # Terminal outcome
+            # Detect terminal outcome from next_obs string signal
             if isinstance(next_obs, str):
-                outcome = next_obs.lower()   # "win" / "loss"
+                outcome = next_obs.lower()   # "win" or "loss"
                 done    = True
             elif done:
-                if reward >= 1.0:
-                    outcome = "win"
-                elif reward <= -1.0:
-                    outcome = "loss"
+                # done flag set but no string signal — treat as draw
+                outcome = "draw"
 
             if not done:
                 obs   = next_obs if next_obs is not None else obs
                 slots = next_slots if next_slots is not None else slots
 
-        # Wait for end-of-game screen and click OK before next game
-        _wait_for_end_screen(templates, window_title, policy_name=policy_name)
+        # Terminal-only return: +1 win / -1 loss / 0 draw
+        if outcome == "win":
+            episodic_return = 1.0
+        elif outcome == "loss":
+            episodic_return = -1.0
+        else:
+            episodic_return = 0.0
+
+        _dismiss_end_screen(templates, window_title, policy_name=policy_name)
 
         duration = round(time.time() - t_start, 2)
         ep_len   = max(episode_length, 1)
@@ -271,7 +238,7 @@ def run_evaluation(
             "game_id":              game_id,
             "seed":                 seed,
             "outcome":              outcome,
-            "episodic_return":      round(episode_return, 4),
+            "episodic_return":      episodic_return,   # +1 / -1 / 0 only
             "episode_length":       episode_length,
             "total_actions":        total_actions,
             "wait_actions":         wait_actions,
@@ -282,11 +249,11 @@ def run_evaluation(
 
         logger.log_game(record)
         game_records.append(record)
+        print(f"[{policy_name}] Game {game_id} done — outcome={outcome}  length={episode_length}  duration={duration}s")
 
     # ── finalize ──────────────────────────────────────────────────────────────
     summary = logger.finalize(run_config={"policy": policy_name, "seed": seed, "n_games": n_games})
 
-    # Write per-game CSV to eval_dir
     games_csv_path = eval_dir / f"eval_{policy_name}_games.csv"
     if game_records:
         fieldnames = list(game_records[0].keys())
@@ -296,7 +263,6 @@ def run_evaluation(
             writer.writerows(game_records)
         print(f"[{policy_name}] Per-game CSV written to {games_csv_path}")
 
-    # Write aggregate CSV to eval_dir
     agg_csv_path = eval_dir / f"eval_{policy_name}_aggregate.csv"
     outcomes   = [r["outcome"] for r in game_records]
     returns_   = [r["episodic_return"] for r in game_records]
@@ -307,19 +273,18 @@ def run_evaluation(
     wins       = outcomes.count("win")
 
     agg_row = {
-        "policy":               policy_name,
-        "n_games":              n,
-        "seed":                 seed,
-        "win_rate_mean":        round(wins / n, 4),
-        "win_rate_std":         0.0,
-        "return_mean":          round(float(np.mean(returns_)), 4)   if returns_   else 0.0,
-        "return_std":           round(float(np.std(returns_)),  4)   if returns_   else 0.0,
-        "episode_length_mean":  round(float(np.mean(lengths_)), 2)   if lengths_   else 0.0,
-        "episode_length_std":   round(float(np.std(lengths_)),  2)   if lengths_   else 0.0,
-        "wait_rate_mean":       round(float(np.mean(wait_rates)), 4) if wait_rates else 0.0,
-        "wait_rate_std":        round(float(np.std(wait_rates)),  4) if wait_rates else 0.0,
-        "elixir_overflow_mean": round(float(np.mean(overflows)),  4) if overflows  else 0.0,
-        "finalized_at":         datetime.now().isoformat(),
+        "policy":              policy_name,
+        "n_games":             n,
+        "seed":                seed,
+        "win_rate_mean":       round(wins / n, 4),
+        "win_rate_std":        0.0,
+        "outcome_return_mean": round(float(np.mean(returns_)), 4) if returns_ else 0.0,
+        "episode_length_mean": round(float(np.mean(lengths_)), 2) if lengths_ else 0.0,
+        "episode_length_std":  round(float(np.std(lengths_)),  2) if lengths_ else 0.0,
+        "wait_rate_mean":      round(float(np.mean(wait_rates)), 4) if wait_rates else 0.0,
+        "wait_rate_std":       round(float(np.std(wait_rates)),  4) if wait_rates else 0.0,
+        "elixir_overflow_mean":round(float(np.mean(overflows)),  4) if overflows else 0.0,
+        "finalized_at":        datetime.now().isoformat(),
     }
 
     with open(agg_csv_path, "w", newline="") as f:
