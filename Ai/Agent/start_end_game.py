@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Union
 
+from Ai.Stream_to_frame import Frame_Handler
 
 
 def load_template(path: Path):
@@ -45,7 +46,8 @@ def click_at(x: int, y: int) -> None:
 def auto_play(
     frame_path: Union[str, Path],
     zone: Dict[str, int],
-    thresh: float = 0.99,
+    templates: Dict,               # <-- preloaded templates passed in
+    thresh: float = 0.92,          # lowered from 0.99 — was rejecting all matches
     debug: bool = False
 ) -> Optional[str]:
     """
@@ -54,89 +56,76 @@ def auto_play(
     Parameters:
         frame_path: path to the screenshot image already captured elsewhere
         zone: dict containing at least 'left' and 'top' offsets
-        img_yellow_path: template path for yellow/play button
-        img_blue_path: template path for blue/ok button
-        img_red_path: template path for red button
-        thresh: template matching threshold
+        templates: preloaded template images dict (loaded once outside the loop)
+        thresh: template matching threshold (default 0.92)
         debug: if True, show a debug window with the match
 
     Returns:
-        The detected button name ('play', 'ok', or 'red') if matched,
-        otherwise None.
+        The detected button name if matched, otherwise None.
+        Priority order: 'menu' -> 'training_camp' -> 'ok_training' -> 'ok'
     """
-    img_yellow_path = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\Agent\yellow.jpg"
-    img_blue_path = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\Agent\blue.jpg"
-    img_red_path = r"C:\Users\SlayerDz\PycharmProjects\clash-royale-rl-agent\Ai\Agent\red.jpg"
 
-    logging.info("Loading templates")
-    img_y = load_template(img_yellow_path)
-    img_b = load_template(img_blue_path)
-    img_r = load_template(img_red_path)
-
-    frame_path = str(frame_path)
-    img2 = cv2.imread(frame_path)
+    img2 = cv2.imread(str(frame_path))
     if img2 is None:
         logging.warning("Could not read captured frame: %s", frame_path)
         return None
 
-    max_val_y, max_loc_y, (w1, h1) = match_template(img2, img_y)
-    max_val_b, max_loc_b, (w2, h2) = match_template(img2, img_b)
-    max_val_r, max_loc_r, (w3, h3) = match_template(img2, img_r)
+    # --- Run all template matches ---
+    max_val_b,    max_loc_b,    (w1, h1) = match_template(img2, templates["ok"])
+    max_val_menu, max_loc_menu, (w2, h2) = match_template(img2, templates["menu"])
+    max_val_tc,   max_loc_tc,   (w3, h3) = match_template(img2, templates["training_camp"])
+    max_val_ok_t, max_loc_ok_t, (w4, h4) = match_template(img2, templates["ok_training"])
 
-    # Choose the strongest match
-    best_val = max_val_y
-    best_loc = max_loc_y
-    tw, th = w1, h1
-    button_name = "play"
+    # Always print confidence scores — visible in NAV loop output
+    print(
+        f"[AUTO_PLAY] menu={max_val_menu:.4f}  training_camp={max_val_tc:.4f}"
+        f"  ok_training={max_val_ok_t:.4f}  ok={max_val_b:.4f}  (thresh={thresh:.2f})"
+    )
 
-    if max_val_r > best_val:
-        best_val = max_val_r
-        best_loc = max_loc_r
-        tw, th = w3, h3
-        button_name = "red"
+    # --- Candidate table (name, val, loc, w, h) ---
+    candidates = [
+        ("menu",          max_val_menu, max_loc_menu, w2, h2),
+        ("training_camp", max_val_tc,   max_loc_tc,   w3, h3),
+        ("ok_training",   max_val_ok_t, max_loc_ok_t, w4, h4),
+        ("ok",            max_val_b,    max_loc_b,    w1, h1),
+    ]
 
-    if max_val_b > best_val:
-        best_val = max_val_b
-        best_loc = max_loc_b
-        tw, th = w2, h2
-        button_name = "ok"
+    best = max(
+        (c for c in candidates if c[1] >= thresh),
+        key=lambda c: c[1],
+        default=None,
+    )
 
-    if best_val >= thresh:
-        # center within the captured frame
-        cx = int(best_loc[0] + tw // 2)
-        cy = int(best_loc[1] + th // 2)
+    if best is None:
+        return None
 
-        # convert to global screen coordinates using zone offsets
-        global_x = zone.get("left", 0) + cx
-        global_y = zone.get("top", 0) + cy
+    button_name, best_val, best_loc, tw, th = best
 
-        logging.info(
-            "Detected %s button with confidence %.3f at %s",
-            button_name,
-            best_val,
-            (global_x, global_y)
+    cx = int(best_loc[0] + tw // 2)
+    cy = int(best_loc[1] + th // 2)
+
+    global_x = zone.get("left", 0) + cx
+    global_y = zone.get("top", 0) + cy
+
+    print(f"[AUTO_PLAY] >>> clicking '{button_name}' (conf={best_val:.4f}) at ({global_x}, {global_y})")
+    click_at(global_x, global_y)
+
+    if debug:
+        top_left     = best_loc
+        bottom_right = (best_loc[0] + tw, best_loc[1] + th)
+        vis = img2.copy()
+        cv2.rectangle(vis, top_left, bottom_right, (0, 255, 0), 2)
+        cv2.putText(
+            vis,
+            f"{button_name} {best_val:.2f}",
+            (top_left[0], top_left[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
         )
+        cv2.imshow("match", vis)
+        cv2.waitKey(500)
+        cv2.destroyWindow("match")
 
-        click_at(global_x, global_y)
-
-        if debug:
-            top_left = best_loc
-            bottom_right = (best_loc[0] + tw, best_loc[1] + th)
-            vis = img2.copy()
-            cv2.rectangle(vis, top_left, bottom_right, (0, 255, 0), 2)
-            cv2.putText(
-                vis,
-                f"{button_name} {best_val:.2f}",
-                (top_left[0], top_left[1] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
-            cv2.imshow("match", vis)
-            cv2.waitKey(500)
-            cv2.destroyWindow("match")
-
-        return button_name
-
-    return None
+    return button_name
