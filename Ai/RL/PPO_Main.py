@@ -10,7 +10,6 @@ Run:
     python -m Ai.RL.PPO_Main --run_id PPOScratch_s1 --seed 1
     python -m Ai.RL.PPO_Main --run_id BCPPO_NoMask_s1 --seed 1
 """
-
 import argparse
 import traceback
 import sys
@@ -32,7 +31,7 @@ from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
 from Ai.ClashRoyalData import ElixirCost
 from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID
-from Ai.Agent.start_end_game import auto_play
+from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 from Ai.Stream_to_frame import Frame_Handler
@@ -59,6 +58,24 @@ from Ai.models.run_config import (
     ppo_best_checkpoint_path,
     ppo_log_dir,
 )
+
+# ---------------------------------------------------------------------------
+# Template paths (relative to the Agent folder)
+# ---------------------------------------------------------------------------
+
+_AGENT_DIR = Path(__file__).resolve().parent.parent / "Agent"
+
+_TEMPLATE_PATHS = {
+    "ok":            _AGENT_DIR / "ok_end.jpg",
+    "menu":          _AGENT_DIR / "menu_button.png",
+    "training_camp": _AGENT_DIR / "training_camp.png",
+    "ok_training":   _AGENT_DIR / "ok_play.png",
+}
+
+
+def _load_templates() -> dict:
+    """Load all button templates once and return as a dict."""
+    return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +116,7 @@ def collect_rollout(
     env,
     model,
     run_id,
+    templates: dict,
     use_masking=True,
     window_title=DEFAULT_WINDOW_TITLE,
     stop_flag=None,
@@ -107,6 +125,10 @@ def collect_rollout(
     Play one game and collect all transitions.
     Returns the rollout dict (with returns + advantages added) plus
     per-game diagnostic values needed for logging.
+
+    Args:
+        templates: preloaded template images dict (call _load_templates() once
+                   in main() and pass down here — never reload inside the loop).
     """
     model.eval()
     window_buffer = deque(maxlen=WINDOW_SIZE)
@@ -118,12 +140,12 @@ def collect_rollout(
     done    = False
     started = False
 
-    # Wait for game to be ready
+    # Wait for game to be ready (ok_training = the "OK" button on the training-camp screen)
     while not started:
         if stop_flag and stop_flag.is_set():
             return None, {}
         frame, zone = Frame_Handler(window_title=window_title)
-        if auto_play(frame, zone) == "play":
+        if auto_play(frame, zone, templates) == "ok_training":
             started = True
         sleep(2.5)
 
@@ -269,7 +291,7 @@ def collect_rollout(
                 if stop_flag and stop_flag.is_set():
                     break
                 c_f, z = Frame_Handler(window_title=window_title)
-                if auto_play(c_f, z) == "ok":
+                if auto_play(c_f, z, templates) == "ok":
                     sleep(2)
                     break
                 sleep(1)
@@ -308,7 +330,7 @@ def collect_rollout(
         "mean_elixir_at_action": round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0,
         "elixir_overflow_proxy": round(
             sum(1 for r in rewards if r == 0.0) / ep_len, 4
-        ),  # rough proxy; refined in future
+        ),
     }
 
     return rollout, diagnostics
@@ -333,6 +355,11 @@ def main(
     print(f"{'='*60}\n")
 
     torch.manual_seed(seed)
+
+    # --- load templates once for the entire run ---
+    print(f"[{run_id}] Loading button templates...")
+    templates = _load_templates()
+    print(f"[{run_id}] Templates loaded: {list(templates.keys())}")
 
     # --- environment ---
     env = ClashRoyalEnv()
@@ -374,13 +401,14 @@ def main(
 
     # --- training loop ---
     for game_id in range(start_game, n_games + 1):
-        print(f"\n[{run_id}] ── Game {game_id}/{n_games} ──")
+        print(f"\n[{run_id}] —— Game {game_id}/{n_games} ——")
 
         try:
             rollout, diagnostics = collect_rollout(
                 env          = env,
                 model        = model,
                 run_id       = run_id,
+                templates    = templates,
                 use_masking  = use_masking,
                 window_title = window_title,
             )
@@ -440,7 +468,6 @@ def main(
 
         current_wr = logger.log_game(record)
 
-        # Log full PPO update details to updates.json
         logger.log_ppo_update({
             "update_id":        game_id,
             "policy_loss":      round(policy_loss,   6),
@@ -455,7 +482,6 @@ def main(
             "total_steps":      diagnostics["episode_length"],
         })
 
-        # Log rollout summary to rollouts.json
         logger.log_ppo_rollout({
             "game_id":         game_id,
             "steps":           diagnostics["episode_length"],
@@ -467,7 +493,6 @@ def main(
         # --- checkpoint rotation ---
         checkpoint_saved = False
 
-        # Periodic checkpoint every CHECKPOINT_INTERVAL games
         if game_id % CHECKPOINT_INTERVAL == 0:
             _save_checkpoint(
                 model, optimizer, run_id, game_id, current_wr,
@@ -475,7 +500,6 @@ def main(
             )
             checkpoint_saved = True
 
-        # Best checkpoint: overwrite if rolling win rate improved
         if current_wr > best_winrate:
             best_winrate = current_wr
             _save_checkpoint(
@@ -485,14 +509,10 @@ def main(
             print(f"[{run_id}] New best win rate: {best_winrate:.0%} at game {game_id}")
             checkpoint_saved = True
 
-        # Update the CSV row's checkpoint_saved flag if we did save
         if checkpoint_saved:
-            # Re-write the last row with checkpoint_saved=True
-            # (simplest approach: logger already wrote it; we note it in the update log)
             logger.log_ppo_update({"update_id": game_id, "checkpoint_saved": True})
 
     # --- end of run ---
-    # Always save final checkpoint
     _save_checkpoint(
         model, optimizer, run_id, n_games, logger.current_win_rate,
         path=ppo_checkpoint_path(run_id, n_games),
@@ -539,7 +559,6 @@ if __name__ == "__main__":
                         help="BlueStacks window title")
     args = parser.parse_args()
 
-    # Auto-configure from run_id if not explicitly overridden
     use_pretrained = not args.no_pretrain
     use_masking    = not args.no_mask
 
