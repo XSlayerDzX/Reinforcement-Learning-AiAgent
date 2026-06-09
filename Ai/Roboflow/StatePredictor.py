@@ -10,6 +10,38 @@ from Ai.ClashRoyalData import TroopSide, Tower_Side , ElixirDecode, ElixirCost
 from Ai import State_Tracker
 import cv2
 import numpy as np
+import threading
+import queue
+
+# Create a dedicated queue and thread for OpenCV visualization to prevent deadlocks
+display_queue = queue.Queue(maxsize=2)
+
+def _cv2_display_worker():
+    window_created = False
+    while True:
+        try:
+            # Poll the queue for new frames
+            frame = display_queue.get(timeout=0.05)
+            if frame is None:
+                break
+            if not window_created:
+                cv2.namedWindow("Detections", cv2.WINDOW_NORMAL)
+                window_created = True
+            cv2.imshow("Detections", frame)
+            cv2.waitKey(1)
+        except queue.Empty:
+            # Must keep calling waitKey to keep the window responsive on Windows
+            if window_created:
+                try:
+                    cv2.waitKey(1)
+                except:
+                    pass
+        except Exception as e:
+            print(f"CV2 Display Error: {e}")
+
+# Start the display thread
+display_thread = threading.Thread(target=_cv2_display_worker, daemon=True)
+display_thread.start()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,7 +54,7 @@ WORKFLOW = os.getenv("ROBOFLOW_WORKFLOW_STATE", "detect-count-and-visualize")
 if not API_KEY:
     raise ValueError("ROBOFLOW_API_KEY not found in environment variables. Please check your .env file.")
 
-IMG_PATH = r"C:\Users\abdoa\OneDrive\Desktop\photo_2026-02-26_15-32-03.jpg"
+IMG_PATH = r"C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png"
 
 client = InferenceHTTPClient(api_url=API_URL, api_key=API_KEY)
 
@@ -42,6 +74,9 @@ def predict(image_path):
 
 # cv2.namedWindow("Detections", cv2.WINDOW_NORMAL)
 def Show_img(result):
+    if 'img output' not in result[0]:
+        return
+        
     imgbase = result[0]['img output']
     img_bytes = base64.b64decode(imgbase)
 
@@ -51,14 +86,20 @@ def Show_img(result):
 
     small = cv2.resize(frame, None, fx=0.9, fy=0.9, interpolation=cv2.INTER_AREA)
 
-    cv2.imshow("Detections", small)
-    cv2.waitKey(1)
+    # Push to queue instead of displaying directly
+    # Using put_nowait so it doesn't block the training thread if the queue is full
+    try:
+        if display_queue.full():
+            display_queue.get_nowait() # Drop oldest frame
+        display_queue.put_nowait(small)
+    except queue.Full:
+        pass
 
 def ExtractData(imgpath):
     result = predict(imgpath)
-    #Show_img(result)
     Show_img(result)
-    result[0].pop('img output')
+    if 'img output' in result[0]:
+        result[0].pop('img output')
     Slots = {} # slot_1 = "archers",slot_2 = "archers"
     Troops_ally = {} # "knight" : (x,y), ally
     Troops_enemy = {} # "knight" : (x,y), enemy

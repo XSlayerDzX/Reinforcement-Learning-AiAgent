@@ -6,7 +6,10 @@ import win32gui  # Importing win32gui for interacting with Windows GUI elements
 import pygetwindow as gw
 from Create_DataSet import *
 from State_Tracker import *
-img_path = r'C:\Users\SlayerDz\Desktop\Screenshot_2025.09.14_21.27.07.354.png'
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+img_path = PROJECT_ROOT / "temp_screens" / "latest.png"
 import ctypes
 
 def make_dpi_aware():

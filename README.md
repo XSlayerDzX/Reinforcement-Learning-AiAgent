@@ -14,6 +14,8 @@ This project builds a full autonomous agent that:
 - **Decides** what card to play and where to place it using a deep LSTM policy network
 - **Acts** by simulating real mouse clicks on the BlueStacks window via `pyautogui`
 
+> **Current direction:** the project now focuses on the BC LSTM + PPO pipeline only. The earlier Decision Transformer experiment was removed because it did not match the direction we want for this project.
+
 ### Why is this interesting?
 
 Most game AI research either uses privileged access (game memory, built-in APIs) or simplified environments. This agent operates purely from **visual perception + structured feature extraction**, the same information a human player has. It also tackles several challenges that make it technically non-trivial:
@@ -25,6 +27,13 @@ Most game AI research either uses privileged access (game memory, built-in APIs)
 - **Warm-start from imitation**: rather than learning from scratch (which would take thousands of games), the policy is first trained via **Behavior Cloning** on recorded human gameplay, then fine-tuned with **PPO** to go beyond human demonstrations
 
 This makes it a practical example of the full modern RL stack: perception, feature engineering, imitation learning, and online policy optimization in a real-time game environment.
+
+### Current limitations
+
+- **Computer vision bottleneck:** the project currently has no GPU acceleration for the CV stage, so the agent's understanding of the environment is delayed by roughly **4–5 seconds**. That means it cannot react to actions immediately.
+- **Limited behavior cloning data:** the LSTM is trained on only **70 matches**, which is very limited for behavior cloning. It needs to be retrained with more match data for better results.
+- **Limited detection scope:** the CV model currently only recognizes a subset of card classes and arenas. It has not been trained to detect every card, so the agent is restricted to the supported set.
+- **Small team:** only two people have worked on the AI side so far, so more contribution is needed to improve the dataset and vision pipeline.
 
 ---
 
@@ -76,7 +85,7 @@ flowchart LR
 ## Project Structure
 
 ```
-Reinforcement-Learning-AiAgent/
+clash-royale-rl-agent/
 │
 ├── Ai/
 │   ├── Agent/
@@ -251,10 +260,9 @@ Key dependencies: `torch`, `pyautogui`, `opencv-python`, `pandas`, `numpy`, `inf
 ### 1. Setup
 
 ```bash
-git clone https://github.com/XSlayerDzX/Reinforcement-Learning-AiAgent.git
-cd Reinforcement-Learning-AiAgent
+cd clash-royale-rl-agent
 pip install -r requirements.txt
-cp .env.example .env   # fill in your Roboflow API key
+Copy-Item .env.example .env   # fill in your Roboflow API key
 ```
 
 ### 2. Configure `.env`
@@ -303,24 +311,33 @@ del Ai\RL\ppo_model.pth
 
 The next run will restart PPO fine-tuning from the BC warm-start.
 
----
+### 7. Quick start: first version with the LSTM agent only
 
-## Checkpoint Format
+If you only want to run the behavior-cloned LSTM agent first, use this minimal setup:
 
-```python
-# Save
-torch.save({
-    "model_state_dict":     model.state_dict(),
-    "optimizer_state_dict": optimizer.state_dict(),
-}, "Ai/RL/ppo_model.pth")
+1. Install the dependencies:
 
-# Load / resume
-checkpoint = torch.load("Ai/RL/ppo_model.pth")
-model.load_state_dict(checkpoint["model_state_dict"])
-optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-```
+   ```bash
+   pip install -r requirements.txt
+   ```
 
----
+2. Make sure your `.env` file contains the Roboflow API key and local workflow URL.
+
+3. Start BlueStacks 4 and open Clash Royale.
+
+4. Run the LSTM agent:
+
+   ```bash
+   python -m Ai.Agent.Agent_main
+   ```
+
+5. Optional smoke test with a screenshot:
+
+   ```bash
+   python -m Ai.Behavior_Cloning.run_lstm_inference_test --img-path <path-to-screenshot> --model-path Ai/Behavior_Cloning/lstm.pth
+   ```
+
+This is the easiest way to verify the first version of the agent before touching PPO training.
 
 ## Notes
 
@@ -329,3 +346,4 @@ optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 - All grid coordinates use a **9x18 arena grid**. `grid_to_pixel()` and `bluestacks_to_global_coords()` in `coordinate_utils.py` handle the full conversion chain back to screen clicks.
 - The agent supports the **11-card pool** defined in `ClashRoyalData.py`. Adding new cards requires updating `ElixirCost`, `AVAIL_FEATURE_TO_ACTION_ID`, and retraining the BC model.
 - Tower features are **binary (0/1)**, not HP percentages. The reward signal for tower damage is therefore sparse — it only fires when a tower is fully destroyed in a given step transition.
+- A contributor guide for adding new match datasets and improving the CV model will be added later. Those are the two highest-impact areas for helping the project grow.

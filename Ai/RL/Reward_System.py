@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 
 
-data_set = r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\datasets\linked_dataset.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+data_set = PROJECT_ROOT / "datasets" / "linked_dataset.csv"
 
 
 def compute_reward(match_data_set):

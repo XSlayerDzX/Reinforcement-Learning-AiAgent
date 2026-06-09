@@ -4,7 +4,7 @@ import mss
 import mss.tools
 import win32gui
 
-def Frame_Handler(count=0, temp_folder="temp_screens"):
+def Frame_Handler(count=0, temp_folder="temp_screens", window_title="BlueStacks App Player 1"):
     """
     Capture single frame from BlueStacks. Returns filename or None.
     """
@@ -14,7 +14,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
 
     with mss.mss() as sct:
         # Find BlueStacks window handle by title
-        hwnd = win32gui.FindWindow(None, "BlueStacks App Player 4")
+        hwnd = win32gui.FindWindow(None, window_title)
 
         if not hwnd:
             # Fallback: partial search if the name changes
@@ -27,18 +27,18 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
                 hwnd = handles[0]
             else:
                 print("BlueStacks window not found")
-                return None
+                return None , None
 
         # Skip if minimized
         if win32gui.IsIconic(hwnd):
             print("Window minimised, skipping capture")
-            return None
+            return None , None
 
         # Get dynamic coordinates
         rect = win32gui.GetWindowRect(hwnd)
         x = rect[0]
-        y = rect[1] + 35  # Title bar offset
-        w = rect[2] - x - 32
+        y = rect[1] + 40  # Title bar offset
+        w = rect[2] - x - 40
         h = rect[3] - y
 
         # Fix negative borders
@@ -50,7 +50,7 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
         # Invalid dimensions check
         if w <= 0 or h <= 0:
             print("Invalid window dimensions, skipping")
-            return None
+            return None, None
 
         monitor = {"top": y, "left": x, "width": w, "height": h}
 
@@ -60,8 +60,8 @@ def Frame_Handler(count=0, temp_folder="temp_screens"):
             sct_img = sct.grab(monitor)
             mss.tools.to_png(sct_img.rgb, sct_img.size, output=filename)
             print(f"Captured: {filename}")
-            return filename
+            return filename , monitor
 
         except mss.exception.ScreenShotError as e:
             print(f"Capture error (off-screen?): {e}")
-            return None
+            return None, None
