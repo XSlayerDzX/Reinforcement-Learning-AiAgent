@@ -7,7 +7,7 @@ from debugpy.common.timestamp import current
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Agent.Agent_main import react_agent, ACTION_ID_TO_NAME, get_slot_for_action
-from Reward_System import compute_step_reward
+from Ai.RL.Reward_System import compute_step_reward
 from Ai.check_status import check_match_status
 
 
@@ -221,4 +221,3 @@ class ClashRoyalEnv:
             print(f"[ERROR] step() failed: {e}")
             traceback.print_exc()
             return None, 0.0, True, None, None
-
