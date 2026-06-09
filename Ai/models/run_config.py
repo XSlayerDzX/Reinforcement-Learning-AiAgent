@@ -66,7 +66,7 @@ ENT_COEF      = 0.01
 GRAD_CLIP     = 0.5
 
 # ── BlueStacks window ─────────────────────────────────────────────────────────
-DEFAULT_WINDOW_TITLE = "BlueStacks App Player 1"
+DEFAULT_WINDOW_TITLE = "BlueStacks App Player 4"
 
 # ── Run registry — all valid run IDs ─────────────────────────────────────────
 PPO_RUN_IDS = [

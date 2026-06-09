@@ -7,14 +7,14 @@ from debugpy.common.timestamp import current
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Create_DataSet import Create_Dataset_Row
 from Ai.Agent.Agent_main import react_agent, ACTION_ID_TO_NAME, get_slot_for_action
-from Reward_System import compute_step_reward
+from Ai.RL.Reward_System import compute_step_reward
 from Ai.check_status import check_match_status
 
 
 
 
 
-def Observation(id=0, match_id=0, window_title="BlueStacks App Player 1"):
+def Observation(id=0, match_id=0, window_title="BlueStacks App Player 4"):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}, window_title={window_title}")
     try:
         current_frame, _ = Frame_Handler(id, window_title=window_title)
@@ -64,7 +64,7 @@ def Observation(id=0, match_id=0, window_title="BlueStacks App Player 1"):
 class ClashRoyalEnv:
     """Environment wrapper for the Clash Royale agent."""
 
-    def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0, window_title="BlueStacks App Player 1"):
+    def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0, window_title="BlueStacks App Player 4"):
         print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={max_steps}, window_title={window_title}")
         self.step_delay = step_delay
         self.max_steps = max_steps
