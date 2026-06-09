@@ -47,7 +47,7 @@ def auto_play(
     frame_path: Union[str, Path],
     zone: Dict[str, int],
     templates: Dict,               # <-- preloaded templates passed in
-    thresh: float = 0.99,
+    thresh: float = 0.92,          # lowered from 0.99 — was rejecting all matches
     debug: bool = False
 ) -> Optional[str]:
     """
@@ -57,12 +57,12 @@ def auto_play(
         frame_path: path to the screenshot image already captured elsewhere
         zone: dict containing at least 'left' and 'top' offsets
         templates: preloaded template images dict (loaded once outside the loop)
-        thresh: template matching threshold
+        thresh: template matching threshold (default 0.92)
         debug: if True, show a debug window with the match
 
     Returns:
         The detected button name if matched, otherwise None.
-        Priority order: 'menu' → 'training_camp' → 'ok_training' → 'ok'
+        Priority order: 'menu' -> 'training_camp' -> 'ok_training' -> 'ok'
     """
 
     img2 = cv2.imread(str(frame_path))
@@ -75,6 +75,12 @@ def auto_play(
     max_val_menu, max_loc_menu, (w2, h2) = match_template(img2, templates["menu"])
     max_val_tc,   max_loc_tc,   (w3, h3) = match_template(img2, templates["training_camp"])
     max_val_ok_t, max_loc_ok_t, (w4, h4) = match_template(img2, templates["ok_training"])
+
+    # Always print confidence scores — visible in NAV loop output
+    print(
+        f"[AUTO_PLAY] menu={max_val_menu:.4f}  training_camp={max_val_tc:.4f}"
+        f"  ok_training={max_val_ok_t:.4f}  ok={max_val_b:.4f}  (thresh={thresh:.2f})"
+    )
 
     # --- Candidate table (name, val, loc, w, h) ---
     candidates = [
@@ -91,11 +97,6 @@ def auto_play(
     )
 
     if best is None:
-        logging.info(
-            "No button matched (best confidences — menu: %.3f, training_camp: %.3f,"
-            " ok_training: %.3f, ok: %.3f)",
-            max_val_menu, max_val_tc, max_val_ok_t, max_val_b,
-        )
         return None
 
     button_name, best_val, best_loc, tw, th = best
@@ -106,11 +107,7 @@ def auto_play(
     global_x = zone.get("left", 0) + cx
     global_y = zone.get("top", 0) + cy
 
-    logging.info(
-        "Detected %s button with confidence %.3f at (%d, %d)",
-        button_name, best_val, global_x, global_y,
-    )
-
+    print(f"[AUTO_PLAY] >>> clicking '{button_name}' (conf={best_val:.4f}) at ({global_x}, {global_y})")
     click_at(global_x, global_y)
 
     if debug:
@@ -132,31 +129,3 @@ def auto_play(
         cv2.destroyWindow("match")
 
     return button_name
-
-
-# if __name__ == "__main__":
-#     logging.basicConfig(level=logging.INFO)
-#
-#     # Load templates ONCE before the loop
-#     ok_end = Path(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Agent\ok_end.jpg")
-#     menu = Path(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Agent\menu_button.png")
-#     training_camp = Path(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Agent\training_camp.png")
-#     ok_training = Path(r"C:\Users\abdoa\PycharmProjects\Reinforcement-Learning-AiAgent\Ai\Agent\ok_play.png")
-#
-#     templates = {
-#         "ok":            load_template(ok_end),
-#         "menu":          load_template(menu),
-#         "training_camp": load_template(training_camp),
-#         "ok_training":   load_template(ok_training),
-#     }
-#
-#     try:
-#         while True:
-#             result = Frame_Handler()       # unpack path AND zone from handler
-#             if result is not None:
-#                 frame_path, monitor = result  # <-- fix: was passing tuple as path
-#                 zone = {"left": monitor["left"], "top": monitor["top"]}  # <-- extract offsets
-#                 auto_play(frame_path, zone, templates, debug=False)
-#             time.sleep(1)
-#     except KeyboardInterrupt:
-#         logging.info("Stopped by user")

@@ -25,6 +25,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from time import sleep
 
 import numpy as np
 import pandas as pd
@@ -32,6 +33,108 @@ import pandas as pd
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.models.logger import RunLogger
 from Ai.models.run_config import DEFAULT_WINDOW_TITLE, EVAL_GAMES
+from Ai.Agent.start_end_game import auto_play, load_template
+from Ai.Stream_to_frame import Frame_Handler
+
+
+# ── Template paths ────────────────────────────────────────────────────────────
+
+_AGENT_DIR = Path(__file__).resolve().parent.parent / "Agent"
+
+_TEMPLATE_PATHS = {
+    "ok":            _AGENT_DIR / "ok_end.jpg",
+    "menu":          _AGENT_DIR / "menu_button.png",
+    "training_camp": _AGENT_DIR / "training_camp.png",
+    "ok_training":   _AGENT_DIR / "ok_play.png",
+}
+
+
+def _load_templates() -> dict:
+    """Load all button templates once and return as a dict."""
+    return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
+
+
+def _navigate_to_game(templates: dict, window_title: str, policy_name: str = "") -> bool:
+    """
+    Block until the training-camp game has been launched.
+
+    Navigation flow:
+        main menu  ->  click 'menu'  (battle button)
+                   ->  click 'training_camp'
+                   ->  click 'ok_training'  (the final OK / Play button)
+                   ->  game starts, function returns True
+
+    Sleeps:
+        None detected         -> 1.5 s
+        menu clicked          -> 2.0 s
+        training_camp clicked -> 2.5 s
+        ok_training clicked   -> 3.0 s  then return True
+        ok (end screen)       -> 1.5 s
+    """
+    tag = f"[{policy_name}][NAV]" if policy_name else "[NAV]"
+    print(f"{tag} Waiting for game to start...")
+    tick = 0
+    while True:
+        result = Frame_Handler(window_title=window_title)
+        if result is None:
+            print(f"{tag} Frame_Handler returned None, retrying...")
+            sleep(1.5)
+            tick += 1
+            continue
+
+        frame_path, monitor = result
+        zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
+
+        detected = auto_play(frame_path, zone, templates)
+        tick += 1
+
+        if detected is None:
+            print(f"{tag} tick={tick}  nothing matched — waiting...")
+            sleep(1.5)
+
+        elif detected == "menu":
+            print(f"{tag} tick={tick}  'menu' clicked — waiting for training-camp screen...")
+            sleep(2.0)
+
+        elif detected == "training_camp":
+            print(f"{tag} tick={tick}  'training_camp' clicked — waiting for OK button...")
+            sleep(2.5)
+
+        elif detected == "ok_training":
+            print(f"{tag} tick={tick}  'ok_training' clicked — game launching...")
+            sleep(3.0)
+            return True
+
+        elif detected == "ok":
+            print(f"{tag} tick={tick}  'ok' (end screen) detected unexpectedly — clicking and waiting...")
+            sleep(1.5)
+
+        else:
+            print(f"{tag} tick={tick}  unknown detection '{detected}' — waiting...")
+            sleep(1.5)
+
+
+def _wait_for_end_screen(templates: dict, window_title: str, policy_name: str = "") -> None:
+    """
+    After a game ends, block until the 'ok' end-screen button is detected
+    and clicked, then wait for the screen to clear.
+    """
+    tag = f"[{policy_name}][END]" if policy_name else "[END]"
+    tick = 0
+    while True:
+        result = Frame_Handler(window_title=window_title)
+        if result is None:
+            sleep(1)
+            continue
+        frame_path, monitor = result
+        zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
+        detected = auto_play(frame_path, zone, templates)
+        tick += 1
+        print(f"{tag} tick={tick}  end-screen detection: {detected}")
+        if detected == "ok":
+            sleep(2)
+            break
+        sleep(1)
 
 
 # ── aggregate CSV columns ─────────────────────────────────────────────────────
@@ -77,6 +180,11 @@ def run_evaluation(
     os.makedirs(log_dir,  exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
 
+    # Load templates once for the whole evaluation run
+    print(f"[{policy_name}] Loading button templates...")
+    templates = _load_templates()
+    print(f"[{policy_name}] Templates loaded: {list(templates.keys())}")
+
     logger = RunLogger(log_dir=log_dir, run_id=policy_name, mode="baseline")
     env    = ClashRoyalEnv(window_title=window_title)
 
@@ -86,6 +194,9 @@ def run_evaluation(
         print(f"\n{'='*60}")
         print(f"[{policy_name}] Starting game {game_id}/{n_games}")
         print(f"{'='*60}")
+
+        # Navigate through menu -> training_camp -> ok_training
+        _navigate_to_game(templates, window_title, policy_name=policy_name)
 
         policy.reset()
         t_start = time.time()
@@ -149,6 +260,9 @@ def run_evaluation(
             if not done:
                 obs   = next_obs if next_obs is not None else obs
                 slots = next_slots if next_slots is not None else slots
+
+        # Wait for end-of-game screen and click OK before next game
+        _wait_for_end_screen(templates, window_title, policy_name=policy_name)
 
         duration = round(time.time() - t_start, 2)
         ep_len   = max(episode_length, 1)
