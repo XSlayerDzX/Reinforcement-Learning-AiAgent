@@ -17,7 +17,7 @@ Usage:
 A policy object must implement:
     policy.select_action(obs: pd.DataFrame, slots: dict) -> dict
         Returns: {"action_id": int, "pos_x": float, "pos_y": float}
-    policy.reset()   -> None   (called at the start of every game)
+    policy.reset()   -> None
 """
 
 import csv
@@ -116,10 +116,12 @@ def _dismiss_end_screen(templates: dict, window_title: str, policy_name: str = "
 
 AGGREGATE_COLUMNS = [
     "policy", "n_games", "seed",
-    "win_rate_mean", "win_rate_std",
-    "outcome_return_mean",   # renamed: terminal-only (+1/-1/0)
+    "win_rate_mean",
+    "outcome_return_mean", "outcome_return_std",   # +1/-1/0 terminal only
     "episode_length_mean", "episode_length_std",
+    "duration_seconds_mean", "duration_seconds_std", # wall-clock per game
     "wait_rate_mean", "wait_rate_std",
+    "mean_elixir_at_action_mean",                   # avg elixir when playing a card
     "elixir_overflow_mean",
     "finalized_at",
 ]
@@ -135,15 +137,15 @@ def run_evaluation(
     window_title: str = DEFAULT_WINDOW_TITLE,
 ):
     """
-    Run `n_games` evaluation episodes.
+    Run n_games evaluation episodes.
 
-    episodic_return is TERMINAL-ONLY for baselines:
+    episodic_return is TERMINAL-ONLY for all policies run through this function:
         +1  win
         -1  loss
          0  draw
-    Step rewards from env.step() are deliberately ignored —
-    random / heuristic / BC are not RL and should not accumulate
-    shaped mid-game rewards.
+
+    mean_elixir_at_action: average elixir bar value at the moment a
+    non-wait card action was taken. Tracks elixir efficiency.
     """
     os.makedirs(log_dir,  exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
@@ -173,12 +175,13 @@ def run_evaluation(
             continue
 
         # ── episode loop ──────────────────────────────────────────────────────
-        done           = False
-        episode_length = 0
-        wait_actions   = 0
-        total_actions  = 0
-        overflow_steps = 0
-        outcome        = "draw"
+        done              = False
+        episode_length    = 0
+        wait_actions      = 0
+        total_actions     = 0
+        overflow_steps    = 0
+        elixir_at_action  = []   # elixir value each time a non-wait card is played
+        outcome           = "draw"
 
         while not done:
             try:
@@ -198,8 +201,11 @@ def run_evaluation(
             pos_x     = decision.get("pos_x", -1.0)
             pos_y     = decision.get("pos_y", -1.0)
 
-            # Step — we call env.step() for side-effects (action execution +
-            # done detection) but do NOT use the shaped step reward.
+            # Track elixir at non-wait actions
+            if action_id != 0:
+                elixir_at_action.append(elixir_val)
+
+            # Step — _step_reward intentionally ignored for non-RL policies
             next_obs, _step_reward, done, next_slots, _ = env.step(
                 action_id, pos_x, pos_y, obs, slots
             )
@@ -209,12 +215,10 @@ def run_evaluation(
             if action_id == 0:
                 wait_actions += 1
 
-            # Detect terminal outcome from next_obs string signal
             if isinstance(next_obs, str):
-                outcome = next_obs.lower()   # "win" or "loss"
+                outcome = next_obs.lower()
                 done    = True
             elif done:
-                # done flag set but no string signal — treat as draw
                 outcome = "draw"
 
             if not done:
@@ -233,27 +237,30 @@ def run_evaluation(
 
         duration = round(time.time() - t_start, 2)
         ep_len   = max(episode_length, 1)
+        mean_elixir = round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0
 
         record = {
-            "game_id":              game_id,
-            "seed":                 seed,
-            "outcome":              outcome,
-            "episodic_return":      episodic_return,   # +1 / -1 / 0 only
-            "episode_length":       episode_length,
-            "total_actions":        total_actions,
-            "wait_actions":         wait_actions,
-            "wait_rate":            round(wait_actions / ep_len, 4),
-            "elixir_overflow_proxy":round(overflow_steps / ep_len, 4),
-            "duration_seconds":     duration,
+            "game_id":               game_id,
+            "seed":                  seed,
+            "outcome":               outcome,
+            "episodic_return":       episodic_return,
+            "episode_length":        episode_length,
+            "total_actions":         total_actions,
+            "wait_actions":          wait_actions,
+            "wait_rate":             round(wait_actions / ep_len, 4),
+            "mean_elixir_at_action": mean_elixir,
+            "elixir_overflow_proxy": round(overflow_steps / ep_len, 4),
+            "duration_seconds":      duration,
         }
 
         logger.log_game(record)
         game_records.append(record)
-        print(f"[{policy_name}] Game {game_id} done — outcome={outcome}  length={episode_length}  duration={duration}s")
+        print(f"[{policy_name}] Game {game_id} done — outcome={outcome}  length={episode_length}  elixir_mean={mean_elixir}  duration={duration}s")
 
     # ── finalize ──────────────────────────────────────────────────────────────
     summary = logger.finalize(run_config={"policy": policy_name, "seed": seed, "n_games": n_games})
 
+    # Per-game CSV
     games_csv_path = eval_dir / f"eval_{policy_name}_games.csv"
     if game_records:
         fieldnames = list(game_records[0].keys())
@@ -263,28 +270,34 @@ def run_evaluation(
             writer.writerows(game_records)
         print(f"[{policy_name}] Per-game CSV written to {games_csv_path}")
 
+    # Aggregate CSV
     agg_csv_path = eval_dir / f"eval_{policy_name}_aggregate.csv"
-    outcomes   = [r["outcome"] for r in game_records]
-    returns_   = [r["episodic_return"] for r in game_records]
-    lengths_   = [r["episode_length"] for r in game_records]
-    wait_rates = [r["wait_rate"] for r in game_records]
-    overflows  = [r["elixir_overflow_proxy"] for r in game_records]
+    outcomes   = [r["outcome"]               for r in game_records]
+    returns_   = [r["episodic_return"]        for r in game_records]
+    lengths_   = [r["episode_length"]         for r in game_records]
+    durations_ = [r["duration_seconds"]       for r in game_records]
+    wait_rates = [r["wait_rate"]              for r in game_records]
+    elixirs_   = [r["mean_elixir_at_action"]  for r in game_records]
+    overflows  = [r["elixir_overflow_proxy"]  for r in game_records]
     n          = max(len(game_records), 1)
     wins       = outcomes.count("win")
 
     agg_row = {
-        "policy":              policy_name,
-        "n_games":             n,
-        "seed":                seed,
-        "win_rate_mean":       round(wins / n, 4),
-        "win_rate_std":        0.0,
-        "outcome_return_mean": round(float(np.mean(returns_)), 4) if returns_ else 0.0,
-        "episode_length_mean": round(float(np.mean(lengths_)), 2) if lengths_ else 0.0,
-        "episode_length_std":  round(float(np.std(lengths_)),  2) if lengths_ else 0.0,
-        "wait_rate_mean":      round(float(np.mean(wait_rates)), 4) if wait_rates else 0.0,
-        "wait_rate_std":       round(float(np.std(wait_rates)),  4) if wait_rates else 0.0,
-        "elixir_overflow_mean":round(float(np.mean(overflows)),  4) if overflows else 0.0,
-        "finalized_at":        datetime.now().isoformat(),
+        "policy":                   policy_name,
+        "n_games":                  n,
+        "seed":                     seed,
+        "win_rate_mean":            round(wins / n, 4),
+        "outcome_return_mean":      round(float(np.mean(returns_)),   4) if returns_   else 0.0,
+        "outcome_return_std":       round(float(np.std(returns_)),    4) if returns_   else 0.0,
+        "episode_length_mean":      round(float(np.mean(lengths_)),   2) if lengths_   else 0.0,
+        "episode_length_std":       round(float(np.std(lengths_)),    2) if lengths_   else 0.0,
+        "duration_seconds_mean":    round(float(np.mean(durations_)), 2) if durations_ else 0.0,
+        "duration_seconds_std":     round(float(np.std(durations_)),  2) if durations_ else 0.0,
+        "wait_rate_mean":           round(float(np.mean(wait_rates)), 4) if wait_rates else 0.0,
+        "wait_rate_std":            round(float(np.std(wait_rates)),  4) if wait_rates else 0.0,
+        "mean_elixir_at_action_mean":round(float(np.mean(elixirs_)),  4) if elixirs_   else 0.0,
+        "elixir_overflow_mean":     round(float(np.mean(overflows)),  4) if overflows  else 0.0,
+        "finalized_at":             datetime.now().isoformat(),
     }
 
     with open(agg_csv_path, "w", newline="") as f:
