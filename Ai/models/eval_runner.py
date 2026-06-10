@@ -39,6 +39,7 @@ from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.Stream_to_frame import Frame_Handler
 from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID, WAIT_ID
 from Ai.ClashRoyalData import ElixirCost
+from Ai.Data_Cleaning import final_clean
 
 
 # ── Template paths ────────────────────────────────────────────────────────────
@@ -64,37 +65,60 @@ def _load_templates() -> dict:
     return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
 
 
+def _get_cleaned_row(obs: pd.DataFrame):
+    """
+    Run final_clean on the raw obs DataFrame and return the first row.
+    Returns None if cleaning fails.
+    The cleaned frame has _avab columns (e.g. 'spear goblins_avab') and
+    a numeric 'Elixir' column — the raw frame does NOT have _avab columns.
+    """
+    try:
+        cleaned = final_clean(obs)
+        if isinstance(cleaned, pd.DataFrame) and not cleaned.empty:
+            return cleaned.iloc[0]
+    except Exception:
+        pass
+    return None
+
+
 def _is_illegal(action_id: int, obs: pd.DataFrame) -> bool:
     """
     Return True if action_id violates either:
-      1. Availability mask  — the card's _avab feature is 0 (not in hand)
+      1. Availability mask  — the card's _avab feature is 0 (not in hand / wrong elixir)
       2. Elixir rule        — current elixir < card cost
 
-    Wait (action_id == 0) is always legal.
+    IMPORTANT: reads from the *cleaned* observation so that _avab columns exist.
+    Wait (action_id == WAIT_ID) is always legal.
     """
     if action_id == WAIT_ID:
         return False
 
-    # 1. Availability check
     card_name = _ACTION_ID_TO_CARD.get(action_id)
-    if card_name is not None:
-        avab_key = card_name + "_avab"
-        try:
-            avab = float(obs[avab_key].iloc[0])
-            if avab == 0.0:
-                return True
-        except (KeyError, IndexError, TypeError, ValueError):
-            pass  # feature missing — can't confirm illegal, don't penalise
+    if card_name is None:
+        # action_id not in our card map — treat as unknown, don't penalise
+        return False
+
+    row = _get_cleaned_row(obs)
+    if row is None:
+        return False
+
+    # 1. Availability check  (card_avable() in Data_Cleaning already folds
+    #    elixir into avab, but we still do the explicit elixir check below
+    #    as a belt-and-suspenders guard)
+    avab_key = card_name + "_avab"
+    try:
+        if float(row[avab_key]) == 0.0:
+            return True
+    except (KeyError, TypeError, ValueError):
+        pass  # column missing — fall through to elixir check
 
     # 2. Elixir check
-    if card_name is not None:
-        cost = ElixirCost.get(card_name, 0)
-        try:
-            current_elixir = float(obs["Elixir"].iloc[0])
-            if current_elixir < cost:
-                return True
-        except (KeyError, IndexError, TypeError, ValueError):
-            pass
+    cost = ElixirCost.get(card_name, 0)
+    try:
+        if float(row["Elixir"]) < cost:
+            return True
+    except (KeyError, TypeError, ValueError):
+        pass
 
     return False
 
@@ -166,7 +190,7 @@ AGGREGATE_COLUMNS = [
     "episode_length_mean", "episode_length_std",
     "duration_seconds_mean", "duration_seconds_std",
     "wait_rate_mean", "wait_rate_std",
-    "illegal_action_rate_mean", "illegal_action_rate_std",  # key diagnostic for unmasked models
+    "illegal_action_rate_mean", "illegal_action_rate_std",
     "mean_elixir_at_action_mean",
     "elixir_overflow_mean",
     "finalized_at",
@@ -192,6 +216,10 @@ def run_evaluation(
         illegal_action_count  — steps where predicted action violated avb mask OR elixir rule
         illegal_action_rate   — illegal_action_count / total_actions
         action_dist           — {str(action_id): count} JSON for full episode
+
+    NOTE: _is_illegal() calls final_clean(obs) internally so that _avab columns
+    exist before the lookup. The raw obs frame from the env does NOT contain
+    these columns — they are computed by card_avable() inside final_clean().
     """
     os.makedirs(log_dir,  exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
@@ -228,7 +256,7 @@ def run_evaluation(
         overflow_steps       = 0
         illegal_action_count = 0
         elixir_at_action     = []
-        action_dist          = defaultdict(int)   # {action_id: count}
+        action_dist          = defaultdict(int)
         outcome              = "draw"
 
         while not done:
@@ -249,15 +277,16 @@ def run_evaluation(
             pos_x     = decision.get("pos_x", -1.0)
             pos_y     = decision.get("pos_y", -1.0)
 
-            # ── illegal action check (pre-step, using current obs) ────────────
+            # ── illegal action check (uses cleaned obs internally) ────────────
             if _is_illegal(action_id, obs):
                 illegal_action_count += 1
-                print(f"[{policy_name}] ILLEGAL action_id={action_id} at step {episode_length+1}")
+                print(f"[{policy_name}] ILLEGAL action_id={action_id} "
+                      f"({_ACTION_ID_TO_CARD.get(action_id, '?')}) at step {episode_length+1}")
 
             # ── action distribution counter ───────────────────────────────────
             action_dist[str(action_id)] += 1
 
-            # Track elixir at non-wait actions
+            # Track elixir at non-wait card actions
             if action_id != WAIT_ID:
                 elixir_at_action.append(elixir_val)
 
@@ -291,9 +320,9 @@ def run_evaluation(
 
         _dismiss_end_screen(templates, window_title, policy_name=policy_name)
 
-        duration    = round(time.time() - t_start, 2)
-        ep_len      = max(episode_length, 1)
-        mean_elixir = round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0
+        duration     = round(time.time() - t_start, 2)
+        ep_len       = max(episode_length, 1)
+        mean_elixir  = round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0
         illegal_rate = round(illegal_action_count / ep_len, 4)
 
         record = {
@@ -327,7 +356,6 @@ def run_evaluation(
     # Per-game CSV
     games_csv_path = eval_dir / f"eval_{policy_name}_games.csv"
     if game_records:
-        # Serialise action_dist to JSON string for CSV
         csv_records = [
             {**r, "action_dist": json.dumps(r["action_dist"])}
             for r in game_records
