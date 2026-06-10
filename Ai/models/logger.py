@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 
-# ── helpers ──────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _ensure_dir(path: Path):
     os.makedirs(path, exist_ok=True)
@@ -39,26 +39,32 @@ def _save_json(path: Path, data):
         json.dump(data, f, indent=2)
 
 
-# ── CSV column order ────────────────────────────────────────────────────────
+# ── CSV column order ──────────────────────────────────────────────────────────
 
 BASELINE_CSV_COLUMNS = [
     "policy", "game_id", "seed", "outcome",
-    "episodic_return",          # +1 win / -1 loss / 0 draw (terminal only)
+    "episodic_return",           # +1 win / -1 loss / 0 draw (terminal only)
     "episode_length",
     "total_actions", "wait_actions", "wait_rate",
-    "mean_elixir_at_action",    # avg elixir when a non-wait card was played
+    "illegal_action_count",      # predicted actions that violated avb mask OR elixir rule
+    "illegal_action_rate",       # illegal_action_count / total_actions
+    "mean_elixir_at_action",     # avg elixir when a non-wait card was played
     "elixir_overflow_proxy",
-    "duration_seconds",         # wall-clock game duration
+    "action_dist",               # JSON string: {action_id: count} for the full episode
+    "duration_seconds",
     "timestamp",
 ]
 
 PPO_CSV_COLUMNS = [
     "run_id", "game_id", "seed", "outcome",
-    "episodic_return",          # summed shaped step rewards (RL return)
+    "episodic_return",           # summed shaped step rewards (RL return)
     "episode_length",
     "total_actions", "wait_actions", "wait_rate",
+    "illegal_action_count",
+    "illegal_action_rate",
     "mean_elixir_at_action",
     "elixir_overflow_proxy",
+    "action_dist",
     "policy_loss", "value_loss", "explained_variance",
     "mean_advantage", "std_advantage", "clip_fraction",
     "action_entropy", "cumulative_wins", "win_rate_last_20",
@@ -67,11 +73,11 @@ PPO_CSV_COLUMNS = [
 ]
 
 
-# ── main class ────────────────────────────────────────────────────────────
+# ── main class ────────────────────────────────────────────────────────────────
 
 class RunLogger:
     """
-    Single logger instance per run. Works for both baselines and PPO runs.
+    Single logger instance per run.  Works for both baselines and PPO runs.
     Pass mode="baseline" or mode="ppo" to select the correct CSV schema.
     """
 
@@ -95,6 +101,7 @@ class RunLogger:
         self._all_returns       = []
         self._all_lengths       = []
         self._all_durations     = []
+        self._all_illegal_rates = []
         self._best_winrate      = 0.0
         self._best_winrate_game = 0
 
@@ -103,18 +110,19 @@ class RunLogger:
                 writer = csv.DictWriter(f, fieldnames=self.csv_columns)
                 writer.writeheader()
 
-    # ── per-game logging ────────────────────────────────────────────────
+    # ── per-game logging ──────────────────────────────────────────────────────
 
     def log_game(self, record: dict):
         """
         Append one row to training_log.csv and update winrate.json.
 
-        Baseline record keys (required):
+        Required keys (baseline):
             game_id, seed, outcome, episodic_return, episode_length,
             total_actions, wait_actions, mean_elixir_at_action,
-            elixir_overflow_proxy, duration_seconds
+            elixir_overflow_proxy, duration_seconds,
+            illegal_action_count, illegal_action_rate, action_dist
 
-        PPO record additionally needs:
+        PPO additionally needs:
             policy_loss, value_loss, explained_variance,
             mean_advantage, std_advantage, clip_fraction,
             action_entropy, checkpoint_saved
@@ -126,12 +134,14 @@ class RunLogger:
         if outcome == "win":
             self._cumulative_wins += 1
 
-        episodic_return = record.get("episodic_return", 0.0)
-        ep_length       = record.get("episode_length", 0)
-        duration        = record.get("duration_seconds", 0.0)
+        episodic_return  = record.get("episodic_return", 0.0)
+        ep_length        = record.get("episode_length", 0)
+        duration         = record.get("duration_seconds", 0.0)
+        illegal_rate     = record.get("illegal_action_rate", 0.0)
         self._all_returns.append(episodic_return)
         self._all_lengths.append(ep_length)
         self._all_durations.append(duration)
+        self._all_illegal_rates.append(illegal_rate)
 
         wins_in_window  = sum(1 for o in self._outcome_window if o == "win")
         win_rate_last20 = round(wins_in_window / len(self._outcome_window), 4)
@@ -154,9 +164,16 @@ class RunLogger:
             ep_len = max(row.get("episode_length", 1), 1)
             row["wait_rate"] = round(row.get("wait_actions", 0) / ep_len, 4)
 
-        # Default missing fields to 0.0 so CSV never has blank cells
+        # action_dist must be stored as a JSON string in the CSV
+        if "action_dist" in row and isinstance(row["action_dist"], dict):
+            row["action_dist"] = json.dumps(row["action_dist"])
+
+        # Defaults so CSV never has blank cells
         row.setdefault("mean_elixir_at_action", 0.0)
         row.setdefault("duration_seconds", 0.0)
+        row.setdefault("illegal_action_count", 0)
+        row.setdefault("illegal_action_rate", 0.0)
+        row.setdefault("action_dist", "{}")
 
         with open(self.csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=self.csv_columns, extrasaction="ignore")
@@ -176,11 +193,12 @@ class RunLogger:
             f"[{self.run_id}] Game {record.get('game_id', self._game_count):>3} | "
             f"{outcome:>4} | return={episodic_return:+.3f} | "
             f"WR(20)={win_rate_last20:.0%} | cumW={self._cumulative_wins} | "
+            f"illegal={record.get('illegal_action_count', 0)} ({illegal_rate:.0%}) | "
             f"{duration:.0f}s"
         )
         return win_rate_last20
 
-    # ── PPO-specific logging ────────────────────────────────────────────
+    # ── PPO-specific logging ──────────────────────────────────────────────────
 
     def log_ppo_update(self, update: dict):
         if self.mode != "ppo":
@@ -200,7 +218,7 @@ class RunLogger:
         history.append(rollout_summary)
         _save_json(self.rollouts_path, history)
 
-    # ── end-of-run summary ────────────────────────────────────────────────
+    # ── end-of-run summary ────────────────────────────────────────────────────
 
     def finalize(self, run_config: Optional[dict] = None):
         """Write run_summary.json. Call once after all games are logged."""
@@ -212,20 +230,21 @@ class RunLogger:
         final_winrate = round(total_wins / max(total_games, 1), 4)
 
         summary = {
-            "run_id":               self.run_id,
-            "mode":                 self.mode,
-            "total_games":          total_games,
-            "total_wins":           total_wins,
-            "total_losses":         sum(1 for e in winrate_hist if e["outcome"] == "loss"),
-            "total_draws":          sum(1 for e in winrate_hist if e["outcome"] == "draw"),
-            "final_win_rate":       final_winrate,
-            "best_win_rate":        round(self._best_winrate, 4),
-            "best_win_rate_game":   self._best_winrate_game,
-            "mean_return":          round(float(np.mean(self._all_returns))  if self._all_returns  else 0.0, 4),
-            "std_return":           round(float(np.std(self._all_returns))   if self._all_returns  else 0.0, 4),
-            "mean_episode_length":  round(float(np.mean(self._all_lengths))  if self._all_lengths  else 0.0, 1),
-            "mean_duration_seconds":round(float(np.mean(self._all_durations))if self._all_durations else 0.0, 1),
-            "finalized_at":         datetime.now().isoformat(),
+            "run_id":                self.run_id,
+            "mode":                  self.mode,
+            "total_games":           total_games,
+            "total_wins":            total_wins,
+            "total_losses":          sum(1 for e in winrate_hist if e["outcome"] == "loss"),
+            "total_draws":           sum(1 for e in winrate_hist if e["outcome"] == "draw"),
+            "final_win_rate":        final_winrate,
+            "best_win_rate":         round(self._best_winrate, 4),
+            "best_win_rate_game":    self._best_winrate_game,
+            "mean_return":           round(float(np.mean(self._all_returns))       if self._all_returns       else 0.0, 4),
+            "std_return":            round(float(np.std(self._all_returns))        if self._all_returns       else 0.0, 4),
+            "mean_episode_length":   round(float(np.mean(self._all_lengths))       if self._all_lengths       else 0.0, 1),
+            "mean_duration_seconds": round(float(np.mean(self._all_durations))     if self._all_durations     else 0.0, 1),
+            "mean_illegal_rate":     round(float(np.mean(self._all_illegal_rates)) if self._all_illegal_rates else 0.0, 4),
+            "finalized_at":          datetime.now().isoformat(),
         }
         if run_config:
             summary["run_config"] = run_config
@@ -234,7 +253,7 @@ class RunLogger:
         print(f"[{self.run_id}] Run finalized. Summary written to {self.summary_path}")
         return summary
 
-    # ── convenience properties ────────────────────────────────────────────
+    # ── convenience properties ────────────────────────────────────────────────
 
     @property
     def current_win_rate(self) -> float:

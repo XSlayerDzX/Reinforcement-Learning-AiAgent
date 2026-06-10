@@ -11,10 +11,11 @@ Run:
     python -m Ai.RL.PPO_Main --run_id BCPPO_NoMask_s1 --seed 1
 """
 import argparse
+import json
 import traceback
 import sys
 import time
-from collections import deque
+from collections import defaultdict, deque
 from pathlib import Path
 from time import sleep
 
@@ -29,9 +30,8 @@ from Ai.RL.PPO_Trainer import (
     actor_critic_update,
 )
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
-from Ai.Behavior_Cloning.action_masking_config import WAIT_ID
+from Ai.Behavior_Cloning.action_masking_config import WAIT_ID, AVAIL_FEATURE_TO_ACTION_ID
 from Ai.ClashRoyalData import ElixirCost
-from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID
 from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
@@ -59,6 +59,13 @@ from Ai.models.run_config import (
     ppo_best_checkpoint_path,
     ppo_log_dir,
 )
+
+# Reverse map: action_id -> card_name (built once at import)
+_ACTION_ID_TO_CARD = {
+    v: k.replace("_avab", "")
+    for k, v in AVAIL_FEATURE_TO_ACTION_ID.items()
+    if v is not None
+}
 
 # ---------------------------------------------------------------------------
 # Template paths
@@ -107,8 +114,38 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
     print(f"[{run_id}] Checkpoint saved -> {path}")
 
 
+def _is_illegal_ppo(action_id: int, state: pd.DataFrame, use_masking: bool) -> bool:
+    """
+    Return True if the sampled action violated the availability mask OR the
+    elixir rule — regardless of whether masking is ON or OFF.
+    This always reflects the true legality of the action in the game.
+    """
+    if action_id == WAIT_ID:
+        return False
+    card_name = _ACTION_ID_TO_CARD.get(action_id)
+    if card_name is None:
+        return False
+
+    # Availability check
+    avab_key = card_name + "_avab"
+    try:
+        if float(state[avab_key].iloc[0]) == 0.0:
+            return True
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+
+    # Elixir check
+    cost = ElixirCost.get(card_name, 0)
+    try:
+        if float(state["Elixir"].iloc[0]) < cost:
+            return True
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+
+    return False
+
+
 def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
-    """Click end-screen OK then wait 4 s for the main menu to fully load."""
     print("[END] Waiting for end-screen OK button...")
     for tick in range(1, timeout_ticks + 1):
         result = Frame_Handler(window_title=window_title)
@@ -185,10 +222,12 @@ def collect_rollout(
 
     windows, actions, x_list, y_list = [], [], [], []
     log_probs, rewards, values, masks = [], [], [], []
-    elixir_at_action = []
+    elixir_at_action     = []
+    illegal_action_count = 0
+    action_dist          = defaultdict(int)   # {action_id: count}
 
-    done = False
-    t_start = time.time()   # wall-clock start for duration_seconds
+    done    = False
+    t_start = time.time()
 
     ok = _navigate_to_game(templates, window_title, stop_flag=stop_flag)
     if not ok:
@@ -227,10 +266,6 @@ def collect_rollout(
                 except (KeyError, ValueError, TypeError):
                     current_elixir = 10.0
 
-                ACTION_ID_TO_CARD = {
-                    v: k.replace("_avab", "")
-                    for k, v in AVAIL_FEATURE_TO_ACTION_ID.items() if v is not None
-                }
                 for card_name, cost in ElixirCost.items():
                     avab_key = card_name + "_avab"
                     aid = AVAIL_FEATURE_TO_ACTION_ID.get(avab_key)
@@ -250,12 +285,8 @@ def collect_rollout(
             action_val = action.item()
 
             if use_masking:
-                ACTION_ID_TO_CARD = {
-                    v: k.replace("_avab", "")
-                    for k, v in AVAIL_FEATURE_TO_ACTION_ID.items() if v is not None
-                }
-                if action_val in ACTION_ID_TO_CARD:
-                    card_name = ACTION_ID_TO_CARD[action_val]
+                if action_val in _ACTION_ID_TO_CARD:
+                    card_name = _ACTION_ID_TO_CARD[action_val]
                     card_cost = ElixirCost.get(card_name, 0)
                     try:
                         live_elixir = float(state["Elixir"].iloc[0]) - 1
@@ -265,6 +296,13 @@ def collect_rollout(
                         print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}")
                         action_val = WAIT_ID
                         action     = torch.tensor(WAIT_ID, dtype=torch.long)
+
+            # ── illegal action check (always, regardless of masking) ───────────
+            if _is_illegal_ppo(action_val, state, use_masking):
+                illegal_action_count += 1
+
+            # ── action distribution counter ────────────────────────────────────
+            action_dist[str(action_val)] += 1
 
             if action_val == WAIT_ID:
                 pos_x, pos_y = -1.0, -1.0
@@ -327,7 +365,7 @@ def collect_rollout(
             if done:
                 _dismiss_end_screen(templates, window_title)
 
-    duration = round(time.time() - t_start, 2)   # wall-clock duration
+    duration = round(time.time() - t_start, 2)
 
     rollout = {
         "windows":   windows,
@@ -359,6 +397,9 @@ def collect_rollout(
         "wait_rate":             round(wait_count / ep_len, 4),
         "mean_elixir_at_action": round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0,
         "elixir_overflow_proxy": round(sum(1 for r in rewards if r == 0.0) / ep_len, 4),
+        "illegal_action_count":  illegal_action_count,
+        "illegal_action_rate":   round(illegal_action_count / ep_len, 4),
+        "action_dist":           dict(action_dist),
         "duration_seconds":      duration,
     }
 
@@ -424,7 +465,7 @@ def main(
     best_winrate = logger.best_win_rate
 
     for game_id in range(start_game, n_games + 1):
-        print(f"\n[{run_id}] —— Game {game_id}/{n_games} ——")
+        print(f"\n[{run_id}] ── Game {game_id}/{n_games} ──")
 
         try:
             rollout, diagnostics = collect_rollout(
@@ -458,12 +499,10 @@ def main(
             traceback.print_exc()
             continue
 
-        returns_arr = np.array(rollout["returns"])
-        values_arr  = np.array(rollout["values"])
-        residuals   = returns_arr - values_arr
-        explained_var = float(
-            1 - np.var(residuals) / (np.var(returns_arr) + 1e-8)
-        )
+        returns_arr   = np.array(rollout["returns"])
+        values_arr    = np.array(rollout["values"])
+        residuals     = returns_arr - values_arr
+        explained_var = float(1 - np.var(residuals) / (np.var(returns_arr) + 1e-8))
 
         record = {
             "game_id":               game_id,
@@ -474,8 +513,11 @@ def main(
             "total_actions":         diagnostics["total_actions"],
             "wait_actions":          diagnostics["wait_actions"],
             "wait_rate":             diagnostics["wait_rate"],
+            "illegal_action_count":  diagnostics["illegal_action_count"],
+            "illegal_action_rate":   diagnostics["illegal_action_rate"],
             "mean_elixir_at_action": diagnostics["mean_elixir_at_action"],
             "elixir_overflow_proxy": diagnostics["elixir_overflow_proxy"],
+            "action_dist":           diagnostics["action_dist"],
             "policy_loss":           round(policy_loss,   6),
             "value_loss":            round(value_loss,    6),
             "explained_variance":    round(explained_var, 4),
@@ -490,25 +532,29 @@ def main(
         current_wr = logger.log_game(record)
 
         logger.log_ppo_update({
-            "update_id":        game_id,
-            "policy_loss":      round(policy_loss,   6),
-            "value_loss":       round(value_loss,    6),
-            "clip_fraction":    round(clip_fraction, 4),
-            "action_entropy":   round(action_entropy,4),
-            "explained_var":    round(explained_var, 4),
-            "mean_advantage":   diagnostics["mean_advantage"],
-            "std_advantage":    diagnostics["std_advantage"],
-            "outcome":          diagnostics["outcome"],
-            "total_reward":     diagnostics["episodic_return"],
-            "total_steps":      diagnostics["episode_length"],
+            "update_id":             game_id,
+            "policy_loss":           round(policy_loss,   6),
+            "value_loss":            round(value_loss,    6),
+            "clip_fraction":         round(clip_fraction, 4),
+            "action_entropy":        round(action_entropy,4),
+            "explained_var":         round(explained_var, 4),
+            "mean_advantage":        diagnostics["mean_advantage"],
+            "std_advantage":         diagnostics["std_advantage"],
+            "illegal_action_count":  diagnostics["illegal_action_count"],
+            "illegal_action_rate":   diagnostics["illegal_action_rate"],
+            "outcome":               diagnostics["outcome"],
+            "total_reward":          diagnostics["episodic_return"],
+            "total_steps":           diagnostics["episode_length"],
         })
 
         logger.log_ppo_rollout({
-            "game_id":         game_id,
-            "steps":           diagnostics["episode_length"],
-            "total_reward":    diagnostics["episodic_return"],
-            "forced_waits":    diagnostics["wait_actions"],
-            "mean_advantage":  diagnostics["mean_advantage"],
+            "game_id":              game_id,
+            "steps":                diagnostics["episode_length"],
+            "total_reward":         diagnostics["episodic_return"],
+            "forced_waits":         diagnostics["wait_actions"],
+            "mean_advantage":       diagnostics["mean_advantage"],
+            "illegal_action_count": diagnostics["illegal_action_count"],
+            "action_dist":          diagnostics["action_dist"],
         })
 
         checkpoint_saved = False

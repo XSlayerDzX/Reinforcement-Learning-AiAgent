@@ -21,8 +21,10 @@ A policy object must implement:
 """
 
 import csv
+import json
 import os
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from time import sleep
@@ -35,6 +37,8 @@ from Ai.models.logger import RunLogger
 from Ai.models.run_config import DEFAULT_WINDOW_TITLE, EVAL_GAMES
 from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.Stream_to_frame import Frame_Handler
+from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID, WAIT_ID
+from Ai.ClashRoyalData import ElixirCost
 
 
 # ── Template paths ────────────────────────────────────────────────────────────
@@ -48,9 +52,51 @@ _TEMPLATE_PATHS = {
     "ok_training":   _AGENT_DIR / "ok_play.png",
 }
 
+# Reverse map: action_id -> card_name  (built once at import time)
+_ACTION_ID_TO_CARD = {
+    v: k.replace("_avab", "")
+    for k, v in AVAIL_FEATURE_TO_ACTION_ID.items()
+    if v is not None
+}
+
 
 def _load_templates() -> dict:
     return {key: load_template(path) for key, path in _TEMPLATE_PATHS.items()}
+
+
+def _is_illegal(action_id: int, obs: pd.DataFrame) -> bool:
+    """
+    Return True if action_id violates either:
+      1. Availability mask  — the card's _avab feature is 0 (not in hand)
+      2. Elixir rule        — current elixir < card cost
+
+    Wait (action_id == 0) is always legal.
+    """
+    if action_id == WAIT_ID:
+        return False
+
+    # 1. Availability check
+    card_name = _ACTION_ID_TO_CARD.get(action_id)
+    if card_name is not None:
+        avab_key = card_name + "_avab"
+        try:
+            avab = float(obs[avab_key].iloc[0])
+            if avab == 0.0:
+                return True
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass  # feature missing — can't confirm illegal, don't penalise
+
+    # 2. Elixir check
+    if card_name is not None:
+        cost = ElixirCost.get(card_name, 0)
+        try:
+            current_elixir = float(obs["Elixir"].iloc[0])
+            if current_elixir < cost:
+                return True
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
+
+    return False
 
 
 def _navigate_to_game(templates: dict, window_title: str, policy_name: str = "") -> bool:
@@ -92,7 +138,6 @@ def _navigate_to_game(templates: dict, window_title: str, policy_name: str = "")
 
 
 def _dismiss_end_screen(templates: dict, window_title: str, policy_name: str = "", timeout_ticks: int = 20) -> None:
-    """Poll for the 'ok' end-screen button, click it, then wait 4 s for the menu to load."""
     tag = f"[{policy_name}][END]" if policy_name else "[END]"
     print(f"{tag} Waiting for end-screen OK...")
     for tick in range(1, timeout_ticks + 1):
@@ -117,11 +162,12 @@ def _dismiss_end_screen(templates: dict, window_title: str, policy_name: str = "
 AGGREGATE_COLUMNS = [
     "policy", "n_games", "seed",
     "win_rate_mean",
-    "outcome_return_mean", "outcome_return_std",   # +1/-1/0 terminal only
+    "outcome_return_mean", "outcome_return_std",
     "episode_length_mean", "episode_length_std",
-    "duration_seconds_mean", "duration_seconds_std", # wall-clock per game
+    "duration_seconds_mean", "duration_seconds_std",
     "wait_rate_mean", "wait_rate_std",
-    "mean_elixir_at_action_mean",                   # avg elixir when playing a card
+    "illegal_action_rate_mean", "illegal_action_rate_std",  # key diagnostic for unmasked models
+    "mean_elixir_at_action_mean",
     "elixir_overflow_mean",
     "finalized_at",
 ]
@@ -139,13 +185,13 @@ def run_evaluation(
     """
     Run n_games evaluation episodes.
 
-    episodic_return is TERMINAL-ONLY for all policies run through this function:
-        +1  win
-        -1  loss
-         0  draw
+    episodic_return is TERMINAL-ONLY:
+        +1  win  |  -1  loss  |  0  draw
 
-    mean_elixir_at_action: average elixir bar value at the moment a
-    non-wait card action was taken. Tracks elixir efficiency.
+    Illegal action tracking (all models):
+        illegal_action_count  — steps where predicted action violated avb mask OR elixir rule
+        illegal_action_rate   — illegal_action_count / total_actions
+        action_dist           — {str(action_id): count} JSON for full episode
     """
     os.makedirs(log_dir,  exist_ok=True)
     os.makedirs(eval_dir, exist_ok=True)
@@ -175,13 +221,15 @@ def run_evaluation(
             continue
 
         # ── episode loop ──────────────────────────────────────────────────────
-        done              = False
-        episode_length    = 0
-        wait_actions      = 0
-        total_actions     = 0
-        overflow_steps    = 0
-        elixir_at_action  = []   # elixir value each time a non-wait card is played
-        outcome           = "draw"
+        done                 = False
+        episode_length       = 0
+        wait_actions         = 0
+        total_actions        = 0
+        overflow_steps       = 0
+        illegal_action_count = 0
+        elixir_at_action     = []
+        action_dist          = defaultdict(int)   # {action_id: count}
+        outcome              = "draw"
 
         while not done:
             try:
@@ -201,18 +249,26 @@ def run_evaluation(
             pos_x     = decision.get("pos_x", -1.0)
             pos_y     = decision.get("pos_y", -1.0)
 
+            # ── illegal action check (pre-step, using current obs) ────────────
+            if _is_illegal(action_id, obs):
+                illegal_action_count += 1
+                print(f"[{policy_name}] ILLEGAL action_id={action_id} at step {episode_length+1}")
+
+            # ── action distribution counter ───────────────────────────────────
+            action_dist[str(action_id)] += 1
+
             # Track elixir at non-wait actions
-            if action_id != 0:
+            if action_id != WAIT_ID:
                 elixir_at_action.append(elixir_val)
 
-            # Step — _step_reward intentionally ignored for non-RL policies
+            # Step
             next_obs, _step_reward, done, next_slots, _ = env.step(
                 action_id, pos_x, pos_y, obs, slots
             )
 
             episode_length += 1
             total_actions  += 1
-            if action_id == 0:
+            if action_id == WAIT_ID:
                 wait_actions += 1
 
             if isinstance(next_obs, str):
@@ -225,7 +281,7 @@ def run_evaluation(
                 obs   = next_obs if next_obs is not None else obs
                 slots = next_slots if next_slots is not None else slots
 
-        # Terminal-only return: +1 win / -1 loss / 0 draw
+        # Terminal-only return
         if outcome == "win":
             episodic_return = 1.0
         elif outcome == "loss":
@@ -235,9 +291,10 @@ def run_evaluation(
 
         _dismiss_end_screen(templates, window_title, policy_name=policy_name)
 
-        duration = round(time.time() - t_start, 2)
-        ep_len   = max(episode_length, 1)
+        duration    = round(time.time() - t_start, 2)
+        ep_len      = max(episode_length, 1)
         mean_elixir = round(float(np.mean(elixir_at_action)), 4) if elixir_at_action else 0.0
+        illegal_rate = round(illegal_action_count / ep_len, 4)
 
         record = {
             "game_id":               game_id,
@@ -248,14 +305,21 @@ def run_evaluation(
             "total_actions":         total_actions,
             "wait_actions":          wait_actions,
             "wait_rate":             round(wait_actions / ep_len, 4),
+            "illegal_action_count":  illegal_action_count,
+            "illegal_action_rate":   illegal_rate,
             "mean_elixir_at_action": mean_elixir,
             "elixir_overflow_proxy": round(overflow_steps / ep_len, 4),
+            "action_dist":           dict(action_dist),
             "duration_seconds":      duration,
         }
 
         logger.log_game(record)
         game_records.append(record)
-        print(f"[{policy_name}] Game {game_id} done — outcome={outcome}  length={episode_length}  elixir_mean={mean_elixir}  duration={duration}s")
+        print(
+            f"[{policy_name}] Game {game_id} done — outcome={outcome} "
+            f"length={episode_length} illegal={illegal_action_count} ({illegal_rate:.0%}) "
+            f"elixir_mean={mean_elixir} duration={duration}s"
+        )
 
     # ── finalize ──────────────────────────────────────────────────────────────
     summary = logger.finalize(run_config={"policy": policy_name, "seed": seed, "n_games": n_games})
@@ -263,41 +327,49 @@ def run_evaluation(
     # Per-game CSV
     games_csv_path = eval_dir / f"eval_{policy_name}_games.csv"
     if game_records:
-        fieldnames = list(game_records[0].keys())
+        # Serialise action_dist to JSON string for CSV
+        csv_records = [
+            {**r, "action_dist": json.dumps(r["action_dist"])}
+            for r in game_records
+        ]
+        fieldnames = list(csv_records[0].keys())
         with open(games_csv_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            writer.writerows(game_records)
+            writer.writerows(csv_records)
         print(f"[{policy_name}] Per-game CSV written to {games_csv_path}")
 
     # Aggregate CSV
-    agg_csv_path = eval_dir / f"eval_{policy_name}_aggregate.csv"
-    outcomes   = [r["outcome"]               for r in game_records]
-    returns_   = [r["episodic_return"]        for r in game_records]
-    lengths_   = [r["episode_length"]         for r in game_records]
-    durations_ = [r["duration_seconds"]       for r in game_records]
-    wait_rates = [r["wait_rate"]              for r in game_records]
-    elixirs_   = [r["mean_elixir_at_action"]  for r in game_records]
-    overflows  = [r["elixir_overflow_proxy"]  for r in game_records]
-    n          = max(len(game_records), 1)
-    wins       = outcomes.count("win")
+    agg_csv_path   = eval_dir / f"eval_{policy_name}_aggregate.csv"
+    outcomes       = [r["outcome"]               for r in game_records]
+    returns_       = [r["episodic_return"]        for r in game_records]
+    lengths_       = [r["episode_length"]         for r in game_records]
+    durations_     = [r["duration_seconds"]       for r in game_records]
+    wait_rates     = [r["wait_rate"]              for r in game_records]
+    illegal_rates_ = [r["illegal_action_rate"]    for r in game_records]
+    elixirs_       = [r["mean_elixir_at_action"]  for r in game_records]
+    overflows      = [r["elixir_overflow_proxy"]  for r in game_records]
+    n              = max(len(game_records), 1)
+    wins           = outcomes.count("win")
 
     agg_row = {
-        "policy":                   policy_name,
-        "n_games":                  n,
-        "seed":                     seed,
-        "win_rate_mean":            round(wins / n, 4),
-        "outcome_return_mean":      round(float(np.mean(returns_)),   4) if returns_   else 0.0,
-        "outcome_return_std":       round(float(np.std(returns_)),    4) if returns_   else 0.0,
-        "episode_length_mean":      round(float(np.mean(lengths_)),   2) if lengths_   else 0.0,
-        "episode_length_std":       round(float(np.std(lengths_)),    2) if lengths_   else 0.0,
-        "duration_seconds_mean":    round(float(np.mean(durations_)), 2) if durations_ else 0.0,
-        "duration_seconds_std":     round(float(np.std(durations_)),  2) if durations_ else 0.0,
-        "wait_rate_mean":           round(float(np.mean(wait_rates)), 4) if wait_rates else 0.0,
-        "wait_rate_std":            round(float(np.std(wait_rates)),  4) if wait_rates else 0.0,
-        "mean_elixir_at_action_mean":round(float(np.mean(elixirs_)),  4) if elixirs_   else 0.0,
-        "elixir_overflow_mean":     round(float(np.mean(overflows)),  4) if overflows  else 0.0,
-        "finalized_at":             datetime.now().isoformat(),
+        "policy":                    policy_name,
+        "n_games":                   n,
+        "seed":                      seed,
+        "win_rate_mean":             round(wins / n, 4),
+        "outcome_return_mean":       round(float(np.mean(returns_)),        4) if returns_       else 0.0,
+        "outcome_return_std":        round(float(np.std(returns_)),         4) if returns_       else 0.0,
+        "episode_length_mean":       round(float(np.mean(lengths_)),        2) if lengths_       else 0.0,
+        "episode_length_std":        round(float(np.std(lengths_)),         2) if lengths_       else 0.0,
+        "duration_seconds_mean":     round(float(np.mean(durations_)),      2) if durations_     else 0.0,
+        "duration_seconds_std":      round(float(np.std(durations_)),       2) if durations_     else 0.0,
+        "wait_rate_mean":            round(float(np.mean(wait_rates)),      4) if wait_rates     else 0.0,
+        "wait_rate_std":             round(float(np.std(wait_rates)),       4) if wait_rates     else 0.0,
+        "illegal_action_rate_mean":  round(float(np.mean(illegal_rates_)),  4) if illegal_rates_ else 0.0,
+        "illegal_action_rate_std":   round(float(np.std(illegal_rates_)),   4) if illegal_rates_ else 0.0,
+        "mean_elixir_at_action_mean":round(float(np.mean(elixirs_)),        4) if elixirs_       else 0.0,
+        "elixir_overflow_mean":      round(float(np.mean(overflows)),       4) if overflows      else 0.0,
+        "finalized_at":              datetime.now().isoformat(),
     }
 
     with open(agg_csv_path, "w", newline="") as f:
