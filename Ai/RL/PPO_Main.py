@@ -32,6 +32,7 @@ from Ai.RL.PPO_Trainer import (
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Behavior_Cloning.action_masking_config import WAIT_ID, AVAIL_FEATURE_TO_ACTION_ID
 from Ai.ClashRoyalData import ElixirCost
+from Ai.Data_Cleaning import final_clean
 from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
@@ -114,11 +115,29 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
     print(f"[{run_id}] Checkpoint saved -> {path}")
 
 
-def _is_illegal_ppo(action_id: int, state: pd.DataFrame, use_masking: bool) -> bool:
+def _get_cleaned_row_ppo(state: pd.DataFrame):
+    """
+    Run final_clean on the raw state DataFrame and return the first row.
+    Returns None on failure.
+    Needed because _avab columns are computed inside card_avable() which
+    is called by final_clean() — they do NOT exist in the raw env obs.
+    """
+    try:
+        cleaned = final_clean(state)
+        if isinstance(cleaned, pd.DataFrame) and not cleaned.empty:
+            return cleaned.iloc[0]
+    except Exception:
+        pass
+    return None
+
+
+def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     """
     Return True if the sampled action violated the availability mask OR the
     elixir rule — regardless of whether masking is ON or OFF.
-    This always reflects the true legality of the action in the game.
+
+    Reads from the *cleaned* observation so that _avab columns exist.
+    The raw state frame from the env does NOT contain _avab columns.
     """
     if action_id == WAIT_ID:
         return False
@@ -126,20 +145,24 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame, use_masking: bool) -> b
     if card_name is None:
         return False
 
+    row = _get_cleaned_row_ppo(state)
+    if row is None:
+        return False
+
     # Availability check
     avab_key = card_name + "_avab"
     try:
-        if float(state[avab_key].iloc[0]) == 0.0:
+        if float(row[avab_key]) == 0.0:
             return True
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError):
         pass
 
     # Elixir check
     cost = ElixirCost.get(card_name, 0)
     try:
-        if float(state["Elixir"].iloc[0]) < cost:
+        if float(row["Elixir"]) < cost:
             return True
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError):
         pass
 
     return False
@@ -224,7 +247,7 @@ def collect_rollout(
     log_probs, rewards, values, masks = [], [], [], []
     elixir_at_action     = []
     illegal_action_count = 0
-    action_dist          = defaultdict(int)   # {action_id: count}
+    action_dist          = defaultdict(int)
 
     done    = False
     t_start = time.time()
@@ -297,11 +320,13 @@ def collect_rollout(
                         action_val = WAIT_ID
                         action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
-            # ── illegal action check (always, regardless of masking) ───────────
-            if _is_illegal_ppo(action_val, state, use_masking):
+            # ── illegal action check (always, uses cleaned obs) ───────────────
+            if _is_illegal_ppo(action_val, state):
                 illegal_action_count += 1
+                print(f"[ILLEGAL] action_id={action_val} "
+                      f"({_ACTION_ID_TO_CARD.get(action_val, '?')}) masked={use_masking}")
 
-            # ── action distribution counter ────────────────────────────────────
+            # ── action distribution counter ───────────────────────────────────
             action_dist[str(action_val)] += 1
 
             if action_val == WAIT_ID:
@@ -388,6 +413,8 @@ def collect_rollout(
         "draw"
     )
 
+    advantages_arr = rollout["advantages"]
+
     diagnostics = {
         "outcome":               outcome,
         "episodic_return":       round(float(np.sum(rewards)), 4),
@@ -400,6 +427,8 @@ def collect_rollout(
         "illegal_action_count":  illegal_action_count,
         "illegal_action_rate":   round(illegal_action_count / ep_len, 4),
         "action_dist":           dict(action_dist),
+        "mean_advantage":        round(float(np.mean(advantages_arr)), 4) if advantages_arr else 0.0,
+        "std_advantage":         round(float(np.std(advantages_arr)),  4) if advantages_arr else 0.0,
         "duration_seconds":      duration,
     }
 
