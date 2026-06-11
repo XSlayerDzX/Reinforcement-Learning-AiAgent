@@ -8,6 +8,11 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 data_set = PROJECT_ROOT / "datasets" / "linked_dataset.csv"
 
+# Elixir overflow penalty constants
+_ELIXIR_MAX        = 10.0   # elixir is capped at 10
+_ELIXIR_OVERFLOW_THRESHOLD = 9.5   # start penalising above this
+_ELIXIR_OVERFLOW_PENALTY   = -0.05  # small fixed penalty per step at overflow
+
 
 def compute_reward(match_data_set):
     df = pd.read_csv(match_data_set)
@@ -43,6 +48,14 @@ def compute_reward(match_data_set):
 
 
 def compute_step_reward(prev_obs, curr_obs):
+    """Compute per-step reward from consecutive observations.
+
+    Includes:
+      - Positive reward for reducing enemy column values
+      - Negative reward for reducing ally column values
+      - Elixir overflow penalty: -0.05 per step when elixir >= 9.5
+        This discourages the agent from idling at max elixir.
+    """
     if prev_obs is None or curr_obs is None:
         return 0.0
 
@@ -89,6 +102,16 @@ def compute_step_reward(prev_obs, curr_obs):
             reward += float(d)
         elif str(col).startswith("ally_"):
             reward -= float(d)
+
+    # ── Elixir overflow penalty ───────────────────────────────────────────────
+    # Penalise sitting at max elixir without spending — wastes elixir generation.
+    # Uses current observation so the penalty fires on the step where elixir is high.
+    try:
+        elixir_val = float(curr_s["Elixir"])
+        if elixir_val >= _ELIXIR_OVERFLOW_THRESHOLD:
+            reward += _ELIXIR_OVERFLOW_PENALTY
+    except (KeyError, TypeError, ValueError):
+        pass  # silently skip if Elixir column missing
 
     return float(reward)
 
