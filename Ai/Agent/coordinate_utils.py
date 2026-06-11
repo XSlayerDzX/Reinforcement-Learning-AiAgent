@@ -33,7 +33,7 @@ def grid_to_pixel(gx, gy, arena_w=ARENA_W, arena_h=ARENA_H, grid_w=GRID_W, grid_
     return x_px, y_px
 
 
-def bluestacks_to_global_coords(bs_x, bs_y, bluestacks_resolution=(ARENA_W, ARENA_H), window_title="BlueStacks App Player 1"):
+def bluestacks_to_global_coords(bs_x, bs_y, bluestacks_resolution=(ARENA_W, ARENA_H), window_title="BlueStacks App Player 4"):
     """Invert global->BlueStacks mapping to recover screen coordinates for clicking."""
     make_dpi_aware()
 

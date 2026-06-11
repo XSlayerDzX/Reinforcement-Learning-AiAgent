@@ -4,7 +4,7 @@ import mss
 import mss.tools
 import win32gui
 
-def Frame_Handler(count=0, temp_folder="temp_screens", window_title="BlueStacks App Player 1"):
+def Frame_Handler(count=0, temp_folder="temp_screens", window_title="BlueStacks App Player 4"):
     """
     Capture single frame from BlueStacks. Returns filename or None.
     """

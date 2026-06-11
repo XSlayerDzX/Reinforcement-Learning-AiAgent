@@ -75,6 +75,7 @@ class ClashRoyalEnv:
         self.prev_obs = None
         self.obs = None
         self.current_slots = {}
+        # ensure these exist to avoid AttributeError when calling Observation(...)
         self.id = 0
         self.match_id = 0
 
