@@ -65,6 +65,15 @@ VF_COEF       = 0.5
 ENT_COEF      = 0.01
 GRAD_CLIP     = 0.5
 
+# ── Tower HP reward shaping ───────────────────────────────────────────────────
+# Rewards are proportional to normalised HP change: delta_hp / HP_NORM
+# Side towers: max HP ~1400  -> full destruction yields ~0.3 total shaping
+# King tower:  max HP ~3000  -> full destruction handled by terminal reward
+#              shaping only fires on progressive damage
+TOWER_HP_SIDE_COEF = 0.3   # reward coefficient for side tower HP changes
+TOWER_HP_KING_COEF = 0.5   # reward coefficient for king tower HP changes
+HP_NORM            = 1000.0 # divisor to keep shaping in [-1, +1] range
+
 # ── BlueStacks window ─────────────────────────────────────────────────────────
 DEFAULT_WINDOW_TITLE = "BlueStacks App Player 4"
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import List, Optional
 
 import pandas as pd
 import numpy as np
@@ -27,10 +28,6 @@ def compute_reward(match_data_set):
 
     destroyed_enemy_towers = (df[enemy_towers].shift(1) == 1) & (df[enemy_towers] == 0)
     df.loc[destroyed_enemy_towers.any(axis=1), "r"] += 0.75
-
-    #checking for who won based on pixels
-    #tayeb task
-
 
     rtg = np.zeros(len(df))
     rtg[-1] = df['r'].iloc[-1]
@@ -68,7 +65,6 @@ def compute_step_reward(prev_obs, curr_obs):
     if common.empty:
         return 0.0
 
-    # === FIX: only keep numeric columns before casting ===
     prev_common = prev_s[common]
     curr_common = curr_s[common]
 
@@ -97,4 +93,100 @@ def compute_step_reward(prev_obs, curr_obs):
     return float(reward)
 
 
+def compute_tower_hp_reward(
+    frame_paths: List[str],
+    side_coef: Optional[float] = None,
+    king_coef: Optional[float] = None,
+    hp_norm:   Optional[float] = None,
+) -> List[float]:
+    """Compute per-step tower HP shaping rewards from a list of screenshot paths.
 
+    Called ONCE after the game ends — never during live play.
+    Processes each consecutive frame pair and returns a list of float rewards
+    aligned to the frame_paths list (index 0 = no reward since no previous frame).
+
+    Rules:
+      - Enemy side tower HP decreased  -> + delta / hp_norm * side_coef
+      - Enemy king HP decreased        -> + delta / hp_norm * king_coef
+      - Ally side tower HP decreased   -> - delta / hp_norm * side_coef
+      - Ally king HP decreased         -> - delta / hp_norm * king_coef
+      - HP increased (healing) or 0    -> ignored
+      - OCR fails for either frame     -> that step gets 0.0 (silent skip)
+      - King tower at 0 HP             -> None from OCR (no double-counting
+                                         with the terminal win/loss reward)
+
+    Returns a list of length len(frame_paths) with float rewards.
+    """
+    from Ai.models.run_config import (
+        TOWER_HP_SIDE_COEF,
+        TOWER_HP_KING_COEF,
+        HP_NORM,
+    )
+    from Ai.tower_hp_ocr import run_ocr
+
+    _side = side_coef if side_coef is not None else TOWER_HP_SIDE_COEF
+    _king = king_coef if king_coef is not None else TOWER_HP_KING_COEF
+    _norm = hp_norm   if hp_norm   is not None else HP_NORM
+
+    n = len(frame_paths)
+    rewards = [0.0] * n
+
+    if n == 0:
+        return rewards
+
+    # Run OCR on all frames upfront, silently skipping failures
+    hp_readings = []
+    for path in frame_paths:
+        try:
+            reading = run_ocr(path)
+        except Exception as e:
+            print(f"[tower_hp_reward] OCR exception for {path}: {e}")
+            reading = None
+        hp_readings.append(reading)
+
+    # Compute per-step delta rewards
+    for i in range(1, n):
+        prev_hp = hp_readings[i - 1]
+        curr_hp = hp_readings[i]
+
+        # Either frame unreadable -> skip
+        if prev_hp is None or curr_hp is None:
+            continue
+
+        step_reward = 0.0
+
+        # ── Enemy side towers ─────────────────────────────────────────────
+        for prev_val, curr_val in [
+            (prev_hp.enemy_left,  curr_hp.enemy_left),
+            (prev_hp.enemy_right, curr_hp.enemy_right),
+        ]:
+            if prev_val is not None and curr_val is not None:
+                delta = prev_val - curr_val   # positive = HP lost by enemy
+                if delta > 0:
+                    step_reward += (delta / _norm) * _side
+
+        # ── Enemy king ───────────────────────────────────────────────────
+        if prev_hp.enemy_king is not None and curr_hp.enemy_king is not None:
+            delta = prev_hp.enemy_king - curr_hp.enemy_king
+            if delta > 0:
+                step_reward += (delta / _norm) * _king
+
+        # ── Ally side towers ──────────────────────────────────────────────
+        for prev_val, curr_val in [
+            (prev_hp.ally_left,  curr_hp.ally_left),
+            (prev_hp.ally_right, curr_hp.ally_right),
+        ]:
+            if prev_val is not None and curr_val is not None:
+                delta = prev_val - curr_val   # positive = HP lost by ally
+                if delta > 0:
+                    step_reward -= (delta / _norm) * _side
+
+        # ── Ally king ─────────────────────────────────────────────────────
+        if prev_hp.ally_king is not None and curr_hp.ally_king is not None:
+            delta = prev_hp.ally_king - curr_hp.ally_king
+            if delta > 0:
+                step_reward -= (delta / _norm) * _king
+
+        rewards[i] = round(step_reward, 5)
+
+    return rewards

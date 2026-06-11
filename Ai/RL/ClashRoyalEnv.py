@@ -11,9 +11,6 @@ from Ai.RL.Reward_System import compute_step_reward
 from Ai.check_status import check_match_status
 
 
-
-
-
 def Observation(id=0, match_id=0, window_title="BlueStacks App Player 4"):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}, window_title={window_title}")
     try:
@@ -81,6 +78,11 @@ class ClashRoyalEnv:
         # ensure these exist to avoid AttributeError when calling Observation(...)
         self.id = 0
         self.match_id = 0
+
+        # Accumulates screenshot paths during a game for post-game HP OCR.
+        # Cleared on reset() so each game starts fresh.
+        self.frame_buffer: list[str] = []
+
         print("[DEBUG] ClashRoyalEnv initialized successfully")
 
     def reset(self, max_attempts=30, wait_between=1.0):
@@ -97,6 +99,7 @@ class ClashRoyalEnv:
         self.obs = None
         self.current_slots = {}
         self.last_frame = None
+        self.frame_buffer = []   # clear frame buffer for the new game
 
         attempt = 0
         while attempt < max_attempts:
@@ -116,6 +119,9 @@ class ClashRoyalEnv:
                     self.obs = df
                     self.current_slots = slots or {}
                     self.last_frame = frame
+                    # Track first frame
+                    if frame is not None:
+                        self.frame_buffer.append(frame)
                     print(
                         f"[DEBUG] Initial observation obtained, shape: {self.obs.shape}, "
                         f"slots: {self.current_slots}"
@@ -151,6 +157,10 @@ class ClashRoyalEnv:
             self.current_slots = slots or getattr(self, "current_slots", {})
 
             if obs_raw is not None and isinstance(obs_raw, pd.DataFrame):
+                # Track frame
+                if frame is not None:
+                    self.frame_buffer.append(frame)
+
                 reward = 0.0
                 if self.prev_obs is not None:
                     try:
@@ -183,6 +193,10 @@ class ClashRoyalEnv:
             obs_raw, slots, frame = Observation(getattr(self, "id", self.id), getattr(self, "match_id", 0), window_title=self.window_title)
             self.current_slots = slots or getattr(self, "current_slots", {})
             self.id += 1
+
+            # Always track frame regardless of terminal status
+            if frame is not None:
+                self.frame_buffer.append(frame)
 
             if isinstance(obs_raw, str):
                 status = obs_raw.lower()
