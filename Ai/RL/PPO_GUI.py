@@ -28,7 +28,6 @@ class _StreamRedirect:
         self.widget = widget
 
     def write(self, string):
-        # Must be thread-safe for background logging
         self.widget.after(0, self._insert, string)
 
     def _insert(self, string):
@@ -61,7 +60,6 @@ class PPOApp(ctk.CTk):
 
     # ── UI Construction ───────────────────────────────────────────────────────
     def _build_ui(self):
-        # ── Header ────────────────────────────────────────────────────────────
         header = ctk.CTkFrame(self, corner_radius=0, fg_color="#1a1a2e")
         header.pack(fill="x")
         ctk.CTkLabel(
@@ -78,18 +76,15 @@ class PPOApp(ctk.CTk):
         )
         self._status_badge.pack(side="right", padx=20)
 
-        # ── Body: two columns ─────────────────────────────────────────────────
         body = ctk.CTkFrame(self, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=16, pady=(10, 6))
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=2)
         body.rowconfigure(0, weight=1)
 
-        # Left column: settings
         left = ctk.CTkScrollableFrame(body, label_text="Settings", label_font=ctk.CTkFont(weight="bold"), width=340)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
-        # Right column: log
         right = ctk.CTkFrame(body)
         right.grid(row=0, column=1, sticky="nsew")
         right.rowconfigure(1, weight=1)
@@ -111,7 +106,6 @@ class PPOApp(ctk.CTk):
 
         self._build_settings(left)
 
-        # ── Bottom bar: Start / Stop ───────────────────────────────────────────
         bar = ctk.CTkFrame(self, corner_radius=0, fg_color="#111122", height=56)
         bar.pack(fill="x", side="bottom")
         self._start_btn = ctk.CTkButton(
@@ -167,7 +161,6 @@ class PPOApp(ctk.CTk):
             w.pack(side="right", fill="x", expand=True)
             return w
 
-        # ── Paths ──────────────────────────────────────────────────────────────
         section("📁  Paths")
 
         self._bc_path_var = ctk.StringVar(
@@ -190,14 +183,10 @@ class PPOApp(ctk.CTk):
         path_row("BC Weights (.pth)", self._bc_path_var)
         path_row("PPO Save Path", self._ppo_path_var)
 
-        # ── Training loop ─────────────────────────────────────────────────────
         section("🔁  Training Loop")
 
         self._num_runs_var = ctk.StringVar(value="10")
         row("Training Runs", ctk.CTkEntry, textvariable=self._num_runs_var, width=80)
-
-        self._rollouts_var = ctk.StringVar(value="1")
-        row("Rollouts per Run", ctk.CTkEntry, textvariable=self._rollouts_var, width=80)
 
         self._infinite_var = ctk.BooleanVar(value=False)
         f_inf = ctk.CTkFrame(parent, fg_color="transparent")
@@ -206,7 +195,6 @@ class PPOApp(ctk.CTk):
         ctk.CTkSwitch(f_inf, variable=self._infinite_var, text="", onvalue=True, offvalue=False,
                       command=self._toggle_infinite).pack(side="right")
 
-        # ── Model hyperparams ─────────────────────────────────────────────────
         section("🧠  Model")
 
         self._hidden_size_var = ctk.StringVar(value="128")
@@ -215,7 +203,6 @@ class PPOApp(ctk.CTk):
         self._num_layers_var = ctk.StringVar(value="2")
         row("LSTM Layers", ctk.CTkEntry, textvariable=self._num_layers_var, width=80)
 
-        # ── PPO hyperparams ───────────────────────────────────────────────────
         section("⚙️  PPO Hyperparameters")
 
         self._lr_var = ctk.StringVar(value="1e-4")
@@ -236,7 +223,6 @@ class PPOApp(ctk.CTk):
         self._grad_clip_var = ctk.StringVar(value="0.5")
         row("Grad Clip Norm", ctk.CTkEntry, textvariable=self._grad_clip_var, width=80)
 
-        # ── Env / execution ───────────────────────────────────────────────────
         section("🖥️  Environment")
 
         self._bs_window_var = ctk.StringVar(value="BlueStacks App Player 4")
@@ -248,13 +234,11 @@ class PPOApp(ctk.CTk):
         self._reward_lose_var = ctk.StringVar(value="-1.0")
         row("Reward Lose", ctk.CTkEntry, textvariable=self._reward_lose_var, width=80)
 
-        # ── ArenaBrain Integration ─────────────────────────────────────────────
         section("🌐  ArenaBrain Dashboard")
 
         self._api_key_var = ctk.StringVar(value="")
         row("API Key", ctk.CTkEntry, textvariable=self._api_key_var, width=180, show="*")
 
-        # ── Misc ───────────────────────────────────────────────────────────────
         section("🔧  Misc")
 
         self._reset_ppo_var = ctk.BooleanVar(value=False)
@@ -271,7 +255,7 @@ class PPOApp(ctk.CTk):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _toggle_infinite(self):
-        pass  # visual-only toggle; logic handled in training loop
+        pass
 
     def _clear_log(self):
         self._log.configure(state="normal")
@@ -289,25 +273,24 @@ class PPOApp(ctk.CTk):
 
     def _save_settings(self):
         settings = {
-            "bc_path": self._bc_path_var.get(),
-            "ppo_path": self._ppo_path_var.get(),
-            "num_runs": self._num_runs_var.get(),
-            "rollouts": self._rollouts_var.get(),
-            "infinite": self._infinite_var.get(),
+            "bc_path":     self._bc_path_var.get(),
+            "ppo_path":    self._ppo_path_var.get(),
+            "num_runs":    self._num_runs_var.get(),
+            "infinite":    self._infinite_var.get(),
             "hidden_size": self._hidden_size_var.get(),
-            "num_layers": self._num_layers_var.get(),
-            "lr": self._lr_var.get(),
-            "gamma": self._gamma_var.get(),
-            "clip_eps": self._clip_eps_var.get(),
-            "entropy": self._entropy_var.get(),
-            "vf_coef": self._vf_coef_var.get(),
-            "grad_clip": self._grad_clip_var.get(),
-            "bs_window": self._bs_window_var.get(),
-            "reward_win": self._reward_win_var.get(),
+            "num_layers":  self._num_layers_var.get(),
+            "lr":          self._lr_var.get(),
+            "gamma":       self._gamma_var.get(),
+            "clip_eps":    self._clip_eps_var.get(),
+            "entropy":     self._entropy_var.get(),
+            "vf_coef":     self._vf_coef_var.get(),
+            "grad_clip":   self._grad_clip_var.get(),
+            "bs_window":   self._bs_window_var.get(),
+            "reward_win":  self._reward_win_var.get(),
             "reward_lose": self._reward_lose_var.get(),
-            "api_key": self._api_key_var.get(),
-            "reset_ppo": self._reset_ppo_var.get(),
-            "verbose": self._verbose_var.get()
+            "api_key":     self._api_key_var.get(),
+            "reset_ppo":   self._reset_ppo_var.get(),
+            "verbose":     self._verbose_var.get(),
         }
         try:
             with open(self._settings_file, "w") as f:
@@ -321,31 +304,27 @@ class PPOApp(ctk.CTk):
         try:
             with open(self._settings_file, "r") as f:
                 settings = json.load(f)
-            
-            # Helper to set if key exists
             def s(var, key):
                 if key in settings:
                     var.set(settings[key])
-            
-            s(self._bc_path_var, "bc_path")
-            s(self._ppo_path_var, "ppo_path")
-            s(self._num_runs_var, "num_runs")
-            s(self._rollouts_var, "rollouts")
-            s(self._infinite_var, "infinite")
+            s(self._bc_path_var,     "bc_path")
+            s(self._ppo_path_var,    "ppo_path")
+            s(self._num_runs_var,    "num_runs")
+            s(self._infinite_var,    "infinite")
             s(self._hidden_size_var, "hidden_size")
-            s(self._num_layers_var, "num_layers")
-            s(self._lr_var, "lr")
-            s(self._gamma_var, "gamma")
-            s(self._clip_eps_var, "clip_eps")
-            s(self._entropy_var, "entropy")
-            s(self._vf_coef_var, "vf_coef")
-            s(self._grad_clip_var, "grad_clip")
-            s(self._bs_window_var, "bs_window")
-            s(self._reward_win_var, "reward_win")
+            s(self._num_layers_var,  "num_layers")
+            s(self._lr_var,          "lr")
+            s(self._gamma_var,       "gamma")
+            s(self._clip_eps_var,    "clip_eps")
+            s(self._entropy_var,     "entropy")
+            s(self._vf_coef_var,     "vf_coef")
+            s(self._grad_clip_var,   "grad_clip")
+            s(self._bs_window_var,   "bs_window")
+            s(self._reward_win_var,  "reward_win")
             s(self._reward_lose_var, "reward_lose")
-            s(self._api_key_var, "api_key")
-            s(self._reset_ppo_var, "reset_ppo")
-            s(self._verbose_var, "verbose")
+            s(self._api_key_var,     "api_key")
+            s(self._reset_ppo_var,   "reset_ppo")
+            s(self._verbose_var,     "verbose")
         except Exception as e:
             print(f"Failed to load settings: {e}")
 
@@ -353,23 +332,16 @@ class PPOApp(ctk.CTk):
     def _start_training(self):
         if self._training_thread and self._training_thread.is_alive():
             return
-        
         self._save_settings()
-        
         self._stop_flag.clear()
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
         self._set_status("● RUNNING", "#66bb6a")
-        # Redirect stdout -> log widget
         sys.stdout = _StreamRedirect(self._log)
-        
-        # Check API key before starting
         if not self._api_key_var.get().strip():
-            # Warn but allow offline
             if not messagebox.askyesno("Missing API Key", "No ArenaBrain API Key provided.\n\nDo you want to continue in Offline Mode?"):
                 self._on_training_done()
                 return
-
         self._training_thread = threading.Thread(target=self._training_loop, daemon=True)
         self._training_thread.start()
 
@@ -379,7 +351,6 @@ class PPOApp(ctk.CTk):
         self._stop_btn.configure(state="disabled")
 
     def _on_training_done(self):
-        # stdout is already restored in _training_loop finally block
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
         self._set_status("● IDLE", "#888")
@@ -388,11 +359,10 @@ class PPOApp(ctk.CTk):
     def _training_loop(self):
         original_stdout = sys.stdout
         try:
-            # ── Read settings from GUI ────────────────────────────────────────
+            # ── Read settings ─────────────────────────────────────────────────
             bc_path      = self._bc_path_var.get()
             ppo_path     = self._ppo_path_var.get()
             num_runs     = int(self._num_runs_var.get() or 1)
-            rollouts_n   = int(self._rollouts_var.get() or 1)
             infinite     = self._infinite_var.get()
             hidden_size  = int(self._hidden_size_var.get() or 128)
             num_layers   = int(self._num_layers_var.get() or 2)
@@ -405,36 +375,27 @@ class PPOApp(ctk.CTk):
             ignore_ckpt  = self._reset_ppo_var.get()
             verbose      = self._verbose_var.get()
             api_key      = self._api_key_var.get()
+            bs_window    = self._bs_window_var.get()
 
-            # ── Lazy imports (keep GUI startup fast) ──────────────────────────
+            # ── Lazy imports ──────────────────────────────────────────────────
             import torch
             from Ai.RL.PPO_Trainer import (
-                sequenece_buffering, build_action_mask_from_obs,
-                compute_returns_and_advantages, actor_critic_update,
+                compute_returns_and_advantages,
+                actor_critic_update,
             )
-            from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
-            from Ai.Behavior_Cloning.action_masking_config import WAIT_ID, AVAIL_FEATURE_TO_ACTION_ID
-            from Ai.ClashRoyalData import ElixirCost
             from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
             from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
             from Ai.RL.PPO_Logger import log_update, log_rollout, log_winrate, get_next_update_id
-            from Ai.RL.PPO_Main import collect_rollout
-            import pandas as pd
+            from Ai.RL.PPO_Main import collect_rollout, _load_templates
+            from Ai.models.run_config import (
+                GAMMA, EPSILON, VF_COEF, ENT_COEF, GRAD_CLIP,
+            )
             if str(APP_ROOT) not in sys.path:
                 sys.path.append(str(APP_ROOT))
             from arena_web_integration.arena_client import ArenaBrainClient
 
-            # ── Patch hyperparams into trainer module ─────────────────────────
-            import Ai.RL.PPO_Trainer as _trainer
-            _trainer.GAMMA       = gamma
-            _trainer.CLIP_EPS    = clip_eps
-            _trainer.ENTROPY_COEF = entropy_coef
-            _trainer.VF_COEF     = vf_coef
-            _trainer.GRAD_CLIP   = grad_clip
-
             # ── Build env ─────────────────────────────────────────────────────
             print("[GUI] Initialising environment…")
-            bs_window    = self._bs_window_var.get()
             env = ClashRoyalEnv(window_title=bs_window)
             print("[GUI] Environment ready.")
 
@@ -458,20 +419,29 @@ class PPOApp(ctk.CTk):
             else:
                 print("[GUI] Starting fresh from BC warm-start weights.")
 
-            # ── ArenaBrain Web Client ─────────────────────────────────────────
+            # ── ArenaBrain client ─────────────────────────────────────────────
             web_client = ArenaBrainClient(api_key=api_key)
             if api_key.strip():
                 try:
-                    is_valid = web_client.validate()
-                    if not is_valid:
-                        self.after(0, lambda: messagebox.showerror("Invalid API Key", "The ArenaBrain API Key provided is invalid or inactive.\n\nTraining stopped."))
+                    if not web_client.validate():
+                        self.after(0, lambda: messagebox.showerror(
+                            "Invalid API Key",
+                            "The ArenaBrain API Key is invalid or inactive.\nTraining stopped."
+                        ))
                         return
-                    else:
-                        print("✅ API key validated.")
+                    print("✅ API key validated.")
                 except Exception as e:
                     print(f"⚠️ Could not connect to ArenaBrain API: {e}")
-                    self.after(0, lambda e=e: messagebox.showerror("API Connection Error", f"Could not connect to the cloud server.\n\n{e}\n\nTraining stopped."))
+                    self.after(0, lambda e=e: messagebox.showerror(
+                        "API Connection Error",
+                        f"Could not connect to the cloud server.\n\n{e}\n\nTraining stopped."
+                    ))
                     return
+
+            # ── Load templates once (needed by collect_rollout) ───────────────
+            print("[GUI] Loading button templates…")
+            templates = _load_templates()
+            print(f"[GUI] Templates loaded: {list(templates.keys())}")
 
             # ── Training loop ─────────────────────────────────────────────────
             run = 0
@@ -485,53 +455,59 @@ class PPOApp(ctk.CTk):
                 print(f"[GUI] Run {run}{' / ' + str(num_runs) if not infinite else ' (infinite mode)'}")
                 print(f"{'='*50}")
 
-                # ── Collect rollouts (uses same logic as PPO_Main.collect_rollout) ──
-                print("[GUI] Collecting rollouts…")
-                rollouts = collect_rollout(
-                    env, 
-                    model, 
-                    rollouts_to_collect=rollouts_n, 
-                    window_title=bs_window, 
-                    stop_flag=self._stop_flag
+                # ── Collect one rollout ───────────────────────────────────────
+                # collect_rollout signature:
+                #   (env, model, run_id, templates, use_masking, window_title, stop_flag)
+                # Returns: (rollout dict, diagnostics dict)  or  (None, {})
+                print("[GUI] Collecting rollout…")
+                rollout, diagnostics = collect_rollout(
+                    env          = env,
+                    model        = model,
+                    run_id       = f"gui_run_{run}",
+                    templates    = templates,
+                    use_masking  = True,
+                    window_title = bs_window,
+                    stop_flag    = self._stop_flag,
                 )
 
-                if not rollouts:
-                    print("[GUI][WARN] No rollouts returned, skipping update.")
+                if rollout is None or not rollout.get("rewards"):
+                    print("[GUI][WARN] Empty rollout returned, skipping PPO update.")
                     continue
 
                 if verbose:
-                    first = rollouts[0]
-                    print(f"[GUI] Steps collected: {len(first.get('rewards', []))}")
-                    print(f"[GUI] Total reward: {sum(first.get('rewards', [])):.4f}")
+                    print(f"[GUI] Steps collected : {len(rollout['rewards'])}")
+                    print(f"[GUI] Total reward    : {sum(rollout['rewards']):.4f}")
+                    print(f"[GUI] Outcome         : {diagnostics.get('outcome', 'unknown')}")
+                    print(f"[GUI] Illegal actions : {diagnostics.get('illegal_action_count', 0)} "
+                          f"({diagnostics.get('illegal_action_rate', 0):.0%})")
 
                 # ── PPO update ────────────────────────────────────────────────
-                print("[GUI] Starting PPO update…")
+                # actor_critic_update returns 4 values:
+                #   policy_loss, value_loss, clip_fraction, action_entropy
+                print("[GUI] Running PPO update…")
+                policy_loss, value_loss, clip_fraction, action_entropy = actor_critic_update(
+                    actor_critic_network = model,
+                    optimizer            = opt,
+                    rollout              = rollout,
+                    vf                  = vf_coef,
+                    ent_coef            = entropy_coef,
+                    epsilon             = clip_eps,
+                )
+                print(
+                    f"[GUI] Policy Loss: {policy_loss:.4f} | "
+                    f"Value Loss: {value_loss:.4f} | "
+                    f"Clip Frac: {clip_fraction:.3f} | "
+                    f"Entropy: {action_entropy:.4f}"
+                )
+
+                # ── Log & push ────────────────────────────────────────────────
+                outcome = diagnostics.get("outcome", "draw")
                 update_id = get_next_update_id()
-                final_policy_loss = 0.0
-                final_value_loss  = 0.0
-                outcome = None
-                rollout_logs = []
 
-                for i, rollout in enumerate(rollouts):
-                    ro_entry = log_rollout(update_id, i, rollout)
-                    rollout_logs.append(ro_entry)
-                    terminal_reward = rollout["rewards"][-1] if rollout["rewards"] else 0
-                    if terminal_reward >= env.reward_win:
-                        outcome = "win"
-                    elif terminal_reward <= env.reward_lose:
-                        outcome = "loss"
-                    else:
-                        outcome = "draw"
+                ro_entry     = log_rollout(update_id, 0, rollout)
+                update_entry = log_update(update_id, [rollout], policy_loss, value_loss, outcome)
 
-                    final_policy_loss, final_value_loss = actor_critic_update(
-                        actor_critic_network=model,
-                        optimizer=opt,
-                        rollout=rollout,
-                    )
-                    print(f"[GUI] Rollout {i} → Policy Loss: {final_policy_loss:.4f} | Value Loss: {final_value_loss:.4f}")
-
-                web_client.push_rollouts(update_id, rollout_logs)
-                update_entry = log_update(update_id, rollouts, final_policy_loss, final_value_loss, outcome)
+                web_client.push_rollouts(update_id, [ro_entry])
                 web_client.push_run(update_entry)
 
                 if outcome:
@@ -540,10 +516,10 @@ class PPOApp(ctk.CTk):
                     color = "🟢" if outcome == "win" else "🔴" if outcome == "loss" else "🟡"
                     print(f"[GUI] Outcome: {color} {outcome.upper()}")
 
-                # ── Save ──────────────────────────────────────────────────────
+                # ── Save checkpoint ───────────────────────────────────────────
                 torch.save({
-                    "model_state_dict":      model.state_dict(),
-                    "optimizer_state_dict":  opt.state_dict(),
+                    "model_state_dict":     model.state_dict(),
+                    "optimizer_state_dict": opt.state_dict(),
                 }, ppo_path)
                 print(f"[GUI] Checkpoint saved → {ppo_path}")
 
