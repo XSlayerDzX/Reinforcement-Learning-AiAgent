@@ -45,10 +45,10 @@ def ppo_eval_dir(run_id: str) -> Path:
     return EVALUATIONS_ROOT / "ppo" / run_id
 
 # ── Experiment constants ───────────────────────────────────────────────────────
-EVAL_GAMES          = 15     # games per baseline / final PPO eval
-PPO_TRAINING_GAMES  = 1      # total games per PPO training run
-CHECKPOINT_INTERVAL = 20        # save a periodic checkpoint every N games
-WINRATE_WINDOW      = 20        # rolling window size for win-rate smoothing
+EVAL_GAMES          = 15      # games per baseline / final PPO eval
+PPO_TRAINING_GAMES  = 100     # total games per PPO training run
+CHECKPOINT_INTERVAL = 20      # save a periodic checkpoint every N games
+WINRATE_WINDOW      = 20      # rolling window size for win-rate smoothing
 
 # ── PPO model architecture (must match BC training) ───────────────────────────
 INPUT_SIZE   = 205
@@ -87,5 +87,3 @@ PPO_RUN_IDS = [
 ]
 
 BASELINE_POLICY_NAMES = ["random", "heuristic", "bc_only"]
-
-

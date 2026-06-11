@@ -36,6 +36,7 @@ from Ai.Data_Cleaning import final_clean
 from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
+from Ai.RL.Reward_System import compute_tower_hp_reward
 from Ai.Stream_to_frame import Frame_Handler
 
 from Ai.models.logger import RunLogger
@@ -389,6 +390,21 @@ def collect_rollout(
 
             if done:
                 _dismiss_end_screen(templates, window_title)
+
+    # ── Tower HP reward shaping (post-game, never during live play) ───────────
+    # Uses frame_buffer accumulated by ClashRoyalEnv during the episode.
+    # Rewards are folded into the rewards list before computing advantages.
+    try:
+        hp_rewards = compute_tower_hp_reward(env.frame_buffer)
+        hp_total   = 0.0
+        for i, r in enumerate(hp_rewards):
+            if i < len(rewards) and r != 0.0:
+                rewards[i] += r
+                hp_total   += r
+        if hp_total != 0.0:
+            print(f"[HP_REWARD] Tower HP shaping total: {hp_total:.4f} over {len(env.frame_buffer)} frames")
+    except Exception as e:
+        print(f"[HP_REWARD] compute_tower_hp_reward failed (non-fatal): {e}")
 
     duration = round(time.time() - t_start, 2)
 
