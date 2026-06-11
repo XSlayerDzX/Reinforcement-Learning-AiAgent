@@ -11,10 +11,7 @@ from Ai.RL.Reward_System import compute_step_reward
 from Ai.check_status import check_match_status
 
 
-
-
-
-def Observation(id=0, match_id=0, window_title="BlueStacks App Player 1"):
+def Observation(id=0, match_id=0, window_title="BlueStacks App Player 4"):
     print(f"[DEBUG] Observation called with id={id}, match_id={match_id}, window_title={window_title}")
     try:
         current_frame, _ = Frame_Handler(id, window_title=window_title)
@@ -64,8 +61,8 @@ def Observation(id=0, match_id=0, window_title="BlueStacks App Player 1"):
 class ClashRoyalEnv:
     """Environment wrapper for the Clash Royale agent."""
 
-    def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0, window_title="BlueStacks App Player 1"):
-        print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={step_delay}, window_title={window_title}")
+    def __init__(self, step_delay=1.5, max_steps=500, reward_win=1, reward_lose=-1, reward_draw=0, window_title="BlueStacks App Player 4"):
+        print(f"[DEBUG] ClashRoyalEnv.__init__ called with step_delay={step_delay}, max_steps={max_steps}, window_title={window_title}")
         self.step_delay = step_delay
         self.max_steps = max_steps
         self.reward_win = reward_win
@@ -80,17 +77,19 @@ class ClashRoyalEnv:
         self.current_slots = {}
         self.id = 0
         self.match_id = 0
+
+        # Accumulates screenshot paths during a game for post-game HP OCR.
+        # Cleared on reset() so each game starts fresh.
+        self.frame_buffer: list[str] = []
+
         print("[DEBUG] ClashRoyalEnv initialized successfully")
 
     def reset(self, max_attempts=30, wait_between=1.0):
         """
         Reset environment and wait for initial observation.
-        Returns: (observation, slots)
-
-        If Observation() returns a terminal status (win/loss) during reset it
-        means the end-of-game screen has not fully cleared yet.  We sleep 3 s
-        and retry instead of spinning immediately, so the UI has time to
-        transition back to the main menu before nav loop takes over.
+        Returns: (observation, slots) where observation is a pandas.DataFrame or None,
+        and slots is a dict or None on failure.
+        Side-effect: updates self.current_slots, self.obs, and self.last_frame.
         """
         print("[DEBUG] reset() called")
         self.current_step = 0
@@ -99,6 +98,7 @@ class ClashRoyalEnv:
         self.obs = None
         self.current_slots = {}
         self.last_frame = None
+        self.frame_buffer = []   # clear frame buffer for the new game
 
         attempt = 0
         while attempt < max_attempts:
@@ -111,15 +111,16 @@ class ClashRoyalEnv:
                 row, slots, frame = None, None, None
 
             if isinstance(row, str) and row in ("win", "loss"):
-                # End screen still visible — wait longer before retrying
-                print(f"[DEBUG] Observation returned terminal status '{row}' during reset — waiting 3 s for screen to clear...")
-                sleep(3.0)   # was no extra sleep — end screen needs time to dismiss
+                print(f"[DEBUG] Observation returned terminal status {row} during reset, retrying...")
             elif row:
                 try:
                     df = pd.DataFrame([row])
                     self.obs = df
                     self.current_slots = slots or {}
                     self.last_frame = frame
+                    # Track first frame
+                    if frame is not None:
+                        self.frame_buffer.append(frame)
                     print(
                         f"[DEBUG] Initial observation obtained, shape: {self.obs.shape}, "
                         f"slots: {self.current_slots}"
@@ -142,6 +143,12 @@ class ClashRoyalEnv:
         """
         Execute action and return a 5-tuple:
         (next_obs, reward, done, slots, frame)
+
+        next_obs: pd.DataFrame or None or status string
+        reward: float
+        done: bool
+        slots: dict (may be {} or None)
+        frame: screenshot path returned by Frame_Handler / Observation
         """
         if state is None:
             print("[ERROR] ClashRoyalEnv.step() called with state None")
@@ -149,6 +156,10 @@ class ClashRoyalEnv:
             self.current_slots = slots or getattr(self, "current_slots", {})
 
             if obs_raw is not None and isinstance(obs_raw, pd.DataFrame):
+                # Track frame
+                if frame is not None:
+                    self.frame_buffer.append(frame)
+
                 reward = 0.0
                 if self.prev_obs is not None:
                     try:
@@ -181,6 +192,10 @@ class ClashRoyalEnv:
             obs_raw, slots, frame = Observation(getattr(self, "id", self.id), getattr(self, "match_id", 0), window_title=self.window_title)
             self.current_slots = slots or getattr(self, "current_slots", {})
             self.id += 1
+
+            # Always track frame regardless of terminal status
+            if frame is not None:
+                self.frame_buffer.append(frame)
 
             if isinstance(obs_raw, str):
                 status = obs_raw.lower()

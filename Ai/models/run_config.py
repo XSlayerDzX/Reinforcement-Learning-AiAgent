@@ -45,8 +45,8 @@ def ppo_eval_dir(run_id: str) -> Path:
     return EVALUATIONS_ROOT / "ppo" / run_id
 
 # ── Experiment constants ───────────────────────────────────────────────────────
-EVAL_GAMES          = 15        # games per baseline / final PPO eval
-PPO_TRAINING_GAMES  = 100       # total games per PPO training run
+EVAL_GAMES          = 15     # games per baseline / final PPO eval
+PPO_TRAINING_GAMES  = 1      # total games per PPO training run
 CHECKPOINT_INTERVAL = 20        # save a periodic checkpoint every N games
 WINRATE_WINDOW      = 20        # rolling window size for win-rate smoothing
 
@@ -65,8 +65,17 @@ VF_COEF       = 0.5
 ENT_COEF      = 0.01
 GRAD_CLIP     = 0.5
 
+# ── Tower HP reward shaping ───────────────────────────────────────────────────
+# Rewards are proportional to normalised HP change: delta_hp / HP_NORM
+# Side towers: max HP ~1400  -> full destruction yields ~0.3 total shaping
+# King tower:  max HP ~3000  -> full destruction handled by terminal reward
+#              shaping only fires on progressive damage
+TOWER_HP_SIDE_COEF = 0.3   # reward coefficient for side tower HP changes
+TOWER_HP_KING_COEF = 0.5   # reward coefficient for king tower HP changes
+HP_NORM            = 1000.0 # divisor to keep shaping in [-1, +1] range
+
 # ── BlueStacks window ─────────────────────────────────────────────────────────
-DEFAULT_WINDOW_TITLE = "BlueStacks App Player 1"
+DEFAULT_WINDOW_TITLE = "BlueStacks App Player 4"
 
 # ── Run registry — all valid run IDs ─────────────────────────────────────────
 PPO_RUN_IDS = [
