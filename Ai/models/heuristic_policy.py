@@ -4,13 +4,14 @@ Rule-based policy that uses card availability and elixir cost to make
 the cheapest legal play at a fixed default lane position.  No learning.
 
 Decision logic (in order):
-  1. If elixir < min affordable card cost -> wait.
-  2. Among cards currently in-hand (slot_1 .. slot_4) that are both
+  1. If currently in post-play cooldown -> wait.
+  2. If elixir < ELIXIR_THRESHOLD -> wait (save up before playing).
+  3. Among cards currently in-hand (slot_1 .. slot_4) that are both
      available (*_avab > 0) AND affordable (elixir >= cost),
      pick the one with the LOWEST elixir cost.
-  3. If no affordable card is available -> wait.
-  4. Place the chosen card at the default attack position (centre lane,
-     just across the river on the enemy side).
+  4. If no affordable card is available -> wait.
+  5. Place the chosen card at the default attack position (centre lane,
+     just across the river on the enemy side), then enter cooldown.
 
 Run:
     python -m Ai.models.heuristic_policy --seed 42
@@ -34,6 +35,14 @@ from Ai.Data_Cleaning import final_clean
 _DEFAULT_GX = 4
 _DEFAULT_GY = 10
 
+# Minimum elixir required before the heuristic will attempt to play any card.
+# Prevents dumping the cheapest card the instant it becomes affordable.
+ELIXIR_THRESHOLD = 4.0
+
+# Number of steps to wait after playing a card before playing again.
+# Each env step is ~1.5 s, so 3 steps ≈ 4.5 s cooldown.
+POST_PLAY_COOLDOWN = 3
+
 # Reverse map: action_id -> card_name (for elixir lookup)
 _ACTION_ID_TO_CARD = {
     aid: feat.replace("_avab", "")
@@ -46,14 +55,16 @@ class HeuristicPolicy:
     """
     Deterministic rule-based policy.  Plays the cheapest affordable
     available card at a fixed default position, or waits.
+    Includes a post-play cooldown and elixir threshold to avoid spamming.
     """
 
     def __init__(self, window_title: str = DEFAULT_WINDOW_TITLE):
-        self.window_title = window_title
+        self.window_title   = window_title
+        self._cooldown_left = 0   # steps remaining in post-play cooldown
 
     def reset(self):
         """Called by eval_runner at the start of every game."""
-        pass  # stateless — nothing to reset
+        self._cooldown_left = 0
 
     def select_action(self, obs, slots) -> dict:
         """
@@ -69,6 +80,12 @@ class HeuristicPolicy:
         if obs is None or obs.empty:
             return wait_result
 
+        # ── Post-play cooldown ───────────────────────────────────────────
+        if self._cooldown_left > 0:
+            self._cooldown_left -= 1
+            print(f"[HeuristicPolicy] Cooldown: {self._cooldown_left + 1} steps remaining — waiting")
+            return wait_result
+
         # ── CRITICAL: run final_clean so that _avab columns exist ────────────
         # The raw obs from the env does NOT contain _avab columns — they are
         # computed by card_avable() inside final_clean().  Without this call
@@ -82,13 +99,17 @@ class HeuristicPolicy:
             print(f"[HeuristicPolicy] final_clean failed: {e} — defaulting to wait")
             return wait_result
 
-        # Read current elixir
+        # ── Elixir threshold check ───────────────────────────────────
         try:
             current_elixir = float(last_row.get("Elixir", 0))
         except (TypeError, ValueError):
             current_elixir = 0.0
 
-        # Find cheapest affordable available card
+        if current_elixir < ELIXIR_THRESHOLD:
+            print(f"[HeuristicPolicy] Elixir={current_elixir:.1f} < threshold={ELIXIR_THRESHOLD} — waiting")
+            return wait_result
+
+        # ── Find cheapest affordable available card ────────────────────────
         best_action_id = None
         best_cost      = float("inf")
 
@@ -120,7 +141,7 @@ class HeuristicPolicy:
         if best_action_id is None:
             return wait_result
 
-        # Convert default grid position to screen coordinates
+        # ── Convert grid position to screen coordinates ───────────────────
         try:
             bs_x, bs_y = grid_to_pixel(_DEFAULT_GX, _DEFAULT_GY)
             pos_x, pos_y = bluestacks_to_global_coords(
@@ -132,10 +153,14 @@ class HeuristicPolicy:
             print(f"[HeuristicPolicy] Coordinate conversion failed: {e} — using (-1, -1)")
             pos_x, pos_y = -1.0, -1.0
 
-        print(f"[HeuristicPolicy] action_id={best_action_id} "
+        # Enter cooldown so the next POST_PLAY_COOLDOWN steps are waits
+        self._cooldown_left = POST_PLAY_COOLDOWN
+
+        print(f"[HeuristicPolicy] PLAY action_id={best_action_id} "
               f"({_ACTION_ID_TO_CARD.get(best_action_id, '?')}) "
               f"cost={best_cost} elixir={current_elixir:.1f} "
-              f"pos=({pos_x:.0f},{pos_y:.0f})")
+              f"pos=({pos_x:.0f},{pos_y:.0f}) "
+              f"cooldown={POST_PLAY_COOLDOWN}")
 
         return {"action_id": best_action_id, "pos_x": float(pos_x), "pos_y": float(pos_y)}
 
