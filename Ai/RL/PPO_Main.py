@@ -36,6 +36,7 @@ from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
 from Ai.Stream_to_frame import Frame_Handler
+from Ai.RL.Reward_System import ILLEGAL_ACTION_PENALTY
 
 from Ai.models.logger import RunLogger
 from Ai.models.run_config import (
@@ -54,6 +55,8 @@ from Ai.models.run_config import (
     NUM_LAYERS,
     PPO_TRAINING_GAMES,
     WINDOW_SIZE,
+    REWARD_WIN,
+    REWARD_LOSS,
     ppo_checkpoint_dir,
     ppo_checkpoint_path,
     ppo_best_checkpoint_path,
@@ -68,9 +71,8 @@ _ACTION_ID_TO_CARD = {
 
 # ---------------------------------------------------------------------------
 # HP reward shaping flag
-# Set to True only when the Roboflow OCR server (localhost:9001) is running.
-# run_ocr now does a fast port-check before each call, so no hanging even
-# when True and the server is down — it returns None immediately.
+# run_ocr does a 2s port-check before each call — safe to leave True even
+# when the Roboflow server is occasionally down.
 # ---------------------------------------------------------------------------
 USE_HP_REWARD_SHAPING = True
 
@@ -134,39 +136,23 @@ def _get_cleaned_row_ppo(state: pd.DataFrame):
 def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     """Return True if action_id is illegal given the current state.
 
-    An action is illegal if:
-      - The card is not in one of the 4 hand slots, OR
-      - The card's _avab feature is 0 (cooldown / not available), OR
-      - The player does not have enough elixir.
-    WAIT (action_id == WAIT_ID) is always legal.
-    Unmapped action IDs (not in _ACTION_ID_TO_CARD) are treated as illegal
-    since we have no card info to validate them against.
+    Illegal if:
+      - Unmapped action ID (no card associated), OR
+      - Card _avab feature == 0 (not in hand / on cooldown), OR
+      - Not enough elixir for the card cost.
+    WAIT is always legal.
     """
     if action_id == WAIT_ID:
         return False
 
     card_name = _ACTION_ID_TO_CARD.get(action_id)
     if card_name is None:
-        # Unmapped ID — no card associated, treat as illegal
-        return True
+        return True  # unmapped ID
 
     row = _get_cleaned_row_ppo(state)
     if row is None:
         return False
 
-    # Check slot presence
-    cards_in_hand = set()
-    for slot_col in ("slot_1", "slot_2", "slot_3", "slot_4"):
-        try:
-            slot_val = str(row[slot_col]).strip().lower()
-            if slot_val and slot_val not in ("nan", "none", ""):
-                cards_in_hand.add(slot_val)
-        except (KeyError, TypeError):
-            pass
-    if cards_in_hand and card_name.lower() not in cards_in_hand:
-        return True
-
-    # Check _avab feature
     avab_key = card_name + "_avab"
     try:
         if float(row[avab_key]) == 0.0:
@@ -174,7 +160,6 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     except (KeyError, TypeError, ValueError):
         pass
 
-    # Check elixir cost
     cost = ElixirCost.get(card_name, 0)
     try:
         if float(row["Elixir"]) < cost:
@@ -263,7 +248,6 @@ def collect_rollout(
     illegal_action_count = 0
     action_dist          = defaultdict(int)
 
-    # Track outcome from the terminal status string, never from shaped rewards.
     terminal_outcome = "draw"
 
     done    = False
@@ -311,7 +295,6 @@ def collect_rollout(
                     current_elixir = float(state["Elixir"].iloc[0])
                 except (KeyError, ValueError, TypeError):
                     current_elixir = 10.0
-                # Extra elixir check on top of slot/avab masking
                 for card_name, cost in ElixirCost.items():
                     avab_key = card_name + "_avab"
                     aid = AVAIL_FEATURE_TO_ACTION_ID.get(avab_key)
@@ -341,10 +324,18 @@ def collect_rollout(
                     action_val = WAIT_ID
                     action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
-            if _is_illegal_ppo(action_val, state):
+            # ----------------------------------------------------------------
+            # Illegal-action detection + penalty
+            # ----------------------------------------------------------------
+            is_illegal = _is_illegal_ppo(action_val, state)
+            if is_illegal:
                 illegal_action_count += 1
-                print(f"[ILLEGAL] action_id={action_val} "
-                      f"({_ACTION_ID_TO_CARD.get(action_val, 'unmapped')}) masked={use_masking}", flush=True)
+                print(
+                    f"[ILLEGAL] action_id={action_val} "
+                    f"({_ACTION_ID_TO_CARD.get(action_val, 'unmapped')}) "
+                    f"masked={use_masking}  penalty={ILLEGAL_ACTION_PENALTY}",
+                    flush=True,
+                )
 
             action_dist[str(action_val)] += 1
 
@@ -388,13 +379,17 @@ def collect_rollout(
                     "loss" if status == "loss" else
                     "draw"
                 )
-                done           = True
-                reward         = (
-                    float(env.reward_win)  if status == "win"  else
-                    float(env.reward_lose) if status == "loss" else 0.0
+                done   = True
+                reward = (
+                    REWARD_WIN  if status == "win"  else
+                    REWARD_LOSS if status == "loss" else 0.0
                 )
                 next_state_raw = None
                 print(f"[ROLLOUT] Terminal detected: status='{status}'  reward={reward}", flush=True)
+
+            # Apply illegal-action penalty on top of env reward
+            if is_illegal:
+                reward += ILLEGAL_ACTION_PENALTY
 
             next_state = _ensure_dataframe(next_state_raw)
             if next_state is None:
@@ -419,10 +414,6 @@ def collect_rollout(
     print(f"[ROLLOUT] Loop exited — steps={len(rewards)}  outcome='{terminal_outcome}'  "
           f"total_reward={sum(rewards):.4f}", flush=True)
 
-    # Tower HP reward shaping.
-    # run_ocr now does a 2s port-check before calling the server, so even
-    # with USE_HP_REWARD_SHAPING=True this will never hang when the server
-    # is down — it just skips all frames silently.
     if USE_HP_REWARD_SHAPING:
         print("[ROLLOUT] Running HP reward shaping...", flush=True)
         try:
