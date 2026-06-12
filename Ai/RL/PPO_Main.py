@@ -11,7 +11,6 @@ Run:
     python -m Ai.RL.PPO_Main --run_id BCPPO_NoMask_s1 --seed 1
 """
 import argparse
-import json
 import traceback
 import sys
 import time
@@ -62,7 +61,6 @@ from Ai.models.run_config import (
     ppo_log_dir,
 )
 
-# Reverse map: action_id -> card_name (built once at import)
 _ACTION_ID_TO_CARD = {
     v: k.replace("_avab", "")
     for k, v in AVAIL_FEATURE_TO_ACTION_ID.items()
@@ -132,25 +130,21 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     card_name = _ACTION_ID_TO_CARD.get(action_id)
     if card_name is None:
         return False
-
     row = _get_cleaned_row_ppo(state)
     if row is None:
         return False
-
     avab_key = card_name + "_avab"
     try:
         if float(row[avab_key]) == 0.0:
             return True
     except (KeyError, TypeError, ValueError):
         pass
-
     cost = ElixirCost.get(card_name, 0)
     try:
         if float(row["Elixir"]) < cost:
             return True
     except (KeyError, TypeError, ValueError):
         pass
-
     return False
 
 
@@ -179,19 +173,16 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
     while True:
         if stop_flag and stop_flag.is_set():
             return False
-
         result = Frame_Handler(window_title=window_title)
         if result is None:
             print("[NAV] Frame_Handler returned None, retrying...")
             sleep(1.5)
             tick += 1
             continue
-
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
         detected = auto_play(frame_path, zone, templates)
         tick += 1
-
         if detected is None:
             print(f"[NAV] tick={tick}  nothing matched — waiting...")
             sleep(1.5)
@@ -202,7 +193,7 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
             print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...")
             sleep(3.0)
         elif detected == "ok_training":
-            print(f"[NAV] tick={tick}  'ok_training' clicked — game launching, waiting for match load...")
+            print(f"[NAV] tick={tick}  'ok_training' clicked — game launching...")
             sleep(4.0)
             return True
         elif detected == "ok":
@@ -235,6 +226,12 @@ def collect_rollout(
     illegal_action_count = 0
     action_dist          = defaultdict(int)
 
+    # FIX: track outcome from the terminal status string, never from shaped rewards
+    # Shaped step rewards are tiny floats (e.g. 0.03) and will never equal
+    # reward_win (1.0) / reward_lose (-1.0), so inferring outcome from
+    # rewards[-1] always produced "draw".
+    terminal_outcome = "draw"
+
     done    = False
     t_start = time.time()
 
@@ -261,7 +258,7 @@ def collect_rollout(
             if stop_flag and stop_flag.is_set():
                 break
 
-            # ── sequence buffering (guarded — never aborts the rollout) ──────
+            # sequence buffering — guarded so a bad frame never aborts the rollout
             try:
                 current_window = sequenece_buffering(state, window_buffer, WINDOW_SIZE, INPUT_SIZE)
             except Exception as e:
@@ -269,7 +266,7 @@ def collect_rollout(
                 traceback.print_exc(file=sys.stdout)
                 current_window = [[0.0] * INPUT_SIZE for _ in range(WINDOW_SIZE)]
 
-            window_tensor  = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
+            window_tensor = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
 
             action_logits, pos_logits, value_estimate, _ = model(window_tensor)
             action_logits = action_logits.squeeze(0)
@@ -281,7 +278,6 @@ def collect_rollout(
                     current_elixir = float(state["Elixir"].iloc[0])
                 except (KeyError, ValueError, TypeError):
                     current_elixir = 10.0
-
                 for card_name, cost in ElixirCost.items():
                     avab_key = card_name + "_avab"
                     aid = AVAIL_FEATURE_TO_ACTION_ID.get(avab_key)
@@ -292,26 +288,24 @@ def collect_rollout(
                 current_elixir = 10.0
 
             masked_logits = action_logits.masked_fill(~action_mask, -1e9)
-
-            dist_action = torch.distributions.Categorical(logits=masked_logits)
-            dist_pos    = torch.distributions.Normal(loc=pos_logits, scale=1.0)
+            dist_action   = torch.distributions.Categorical(logits=masked_logits)
+            dist_pos      = torch.distributions.Normal(loc=pos_logits, scale=1.0)
 
             action     = dist_action.sample()
             pos        = dist_pos.sample()
             action_val = action.item()
 
-            if use_masking:
-                if action_val in _ACTION_ID_TO_CARD:
-                    card_name = _ACTION_ID_TO_CARD[action_val]
-                    card_cost = ElixirCost.get(card_name, 0)
-                    try:
-                        live_elixir = float(state["Elixir"].iloc[0]) - 1
-                    except (KeyError, ValueError, TypeError):
-                        live_elixir = 0.0
-                    if live_elixir < card_cost:
-                        print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}")
-                        action_val = WAIT_ID
-                        action     = torch.tensor(WAIT_ID, dtype=torch.long)
+            if use_masking and action_val in _ACTION_ID_TO_CARD:
+                card_name = _ACTION_ID_TO_CARD[action_val]
+                card_cost = ElixirCost.get(card_name, 0)
+                try:
+                    live_elixir = float(state["Elixir"].iloc[0]) - 1
+                except (KeyError, ValueError, TypeError):
+                    live_elixir = 0.0
+                if live_elixir < card_cost:
+                    print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}")
+                    action_val = WAIT_ID
+                    action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
             if _is_illegal_ppo(action_val, state):
                 illegal_action_count += 1
@@ -323,8 +317,8 @@ def collect_rollout(
             if action_val == WAIT_ID:
                 pos_x, pos_y = -1.0, -1.0
             else:
-                gx  = int(round(pos[0].item()))
-                gy  = int(round(pos[1].item()))
+                gx   = int(round(pos[0].item()))
+                gy   = int(round(pos[1].item()))
                 bs_x, bs_y = grid_to_pixel(gx, gy)
                 pos_x, pos_y = bluestacks_to_global_coords(
                     bs_x, bs_y,
@@ -353,13 +347,23 @@ def collect_rollout(
                     action_val, pos_x, pos_y, state_raw, current_slots
                 )
 
+            # FIX: set terminal_outcome HERE from the status string.
+            # Do NOT infer outcome later from rewards[-1] — shaped rewards
+            # are small floats and will never hit reward_win / reward_lose.
             if isinstance(next_state_raw, str):
-                done   = True
-                reward = (
-                    env.reward_win  if next_state_raw.lower() == "win"  else
-                    env.reward_lose if next_state_raw.lower() == "loss" else 0.0
+                status           = next_state_raw.lower()
+                terminal_outcome = (
+                    "win"  if status == "win"  else
+                    "loss" if status == "loss" else
+                    "draw"
+                )
+                done           = True
+                reward         = (
+                    float(env.reward_win)  if status == "win"  else
+                    float(env.reward_lose) if status == "loss" else 0.0
                 )
                 next_state_raw = None
+                print(f"[ROLLOUT] Terminal detected: status='{status}'  reward={reward}")
 
             next_state = _ensure_dataframe(next_state_raw)
             if next_state is None:
@@ -381,7 +385,11 @@ def collect_rollout(
             if done:
                 _dismiss_end_screen(templates, window_title)
 
-    # ── Tower HP reward shaping ───────────────────────────────────────────────
+    # post-loop: confirm we exited and how many steps we collected
+    print(f"[ROLLOUT] Loop exited — steps={len(rewards)}  outcome='{terminal_outcome}'  "
+          f"total_reward={sum(rewards):.4f}")
+
+    # Tower HP reward shaping (post-game, non-fatal)
     try:
         hp_rewards = compute_tower_hp_reward(env.frame_buffer)
         hp_total   = 0.0
@@ -390,37 +398,42 @@ def collect_rollout(
                 rewards[i] += r
                 hp_total   += r
         if hp_total != 0.0:
-            print(f"[HP_REWARD] Tower HP shaping total: {hp_total:.4f} over {len(env.frame_buffer)} frames")
+            print(f"[HP_REWARD] Tower HP shaping total: {hp_total:.4f} "
+                  f"over {len(env.frame_buffer)} frames")
     except Exception as e:
         print(f"[HP_REWARD] compute_tower_hp_reward failed (non-fatal): {e}")
+        traceback.print_exc(file=sys.stdout)
 
-    duration = round(time.time() - t_start, 2)
+    # FIX: compute_returns_and_advantages is now guarded — previously an
+    # unguarded crash here propagated all the way to main()'s except block,
+    # causing the loop to silently continue with no update logged.
+    print("[ROLLOUT] Computing returns and advantages...")
+    try:
+        rollout = {
+            "windows":   windows,
+            "actions":   actions,
+            "x":         x_list,
+            "y":         y_list,
+            "log_probs": log_probs,
+            "rewards":   rewards,
+            "values":    values,
+            "masks":     masks,
+        }
+        rollout = compute_returns_and_advantages(rollout, gamma=GAMMA)
+    except Exception as e:
+        print(f"[ERROR] compute_returns_and_advantages failed: {e}")
+        traceback.print_exc(file=sys.stdout)
+        return None, {}
 
-    rollout = {
-        "windows":   windows,
-        "actions":   actions,
-        "x":         x_list,
-        "y":         y_list,
-        "log_probs": log_probs,
-        "rewards":   rewards,
-        "values":    values,
-        "masks":     masks,
-    }
-    rollout = compute_returns_and_advantages(rollout, gamma=GAMMA)
+    print("[ROLLOUT] Returns computed — building diagnostics...")
 
-    ep_len     = max(len(rewards), 1)
-    wait_count = actions.count(WAIT_ID)
-    terminal_r = rewards[-1] if rewards else 0.0
-    outcome = (
-        "win"  if terminal_r >= env.reward_win  else
-        "loss" if terminal_r <= env.reward_lose else
-        "draw"
-    )
-
+    duration       = round(time.time() - t_start, 2)
+    ep_len         = max(len(rewards), 1)
+    wait_count     = actions.count(WAIT_ID)
     advantages_arr = rollout["advantages"]
 
     diagnostics = {
-        "outcome":               outcome,
+        "outcome":               terminal_outcome,
         "episodic_return":       round(float(np.sum(rewards)), 4),
         "episode_length":        ep_len,
         "total_actions":         ep_len,
@@ -435,6 +448,9 @@ def collect_rollout(
         "std_advantage":         round(float(np.std(advantages_arr)),  4) if advantages_arr else 0.0,
         "duration_seconds":      duration,
     }
+
+    print(f"[ROLLOUT] collect_rollout done — outcome='{terminal_outcome}'  "
+          f"steps={ep_len}  return={diagnostics['episodic_return']}")
 
     return rollout, diagnostics
 
@@ -515,17 +531,19 @@ def main(
             continue
 
         if rollout is None or not rollout["rewards"]:
-            print(f"[WARN] Empty rollout on game {game_id}, skipping update.")
+            print(f"[WARN] Empty/None rollout on game {game_id} — skipping update.")
             continue
+
+        print(f"[{run_id}] Game {game_id}: rollout OK ({len(rollout['rewards'])} steps) — running PPO update...")
 
         try:
             policy_loss, value_loss, clip_fraction, action_entropy = actor_critic_update(
                 actor_critic_network = model,
                 optimizer            = optimizer,
                 rollout              = rollout,
-                vf                  = VF_COEF,
-                ent_coef            = ENT_COEF,
-                epsilon             = EPSILON,
+                vf                   = VF_COEF,
+                ent_coef             = ENT_COEF,
+                epsilon              = EPSILON,
             )
         except Exception as e:
             print(f"[ERROR] actor_critic_update crashed on game {game_id}: {e}")
@@ -561,7 +579,7 @@ def main(
             "mean_advantage":        diagnostics["mean_advantage"],
             "std_advantage":         diagnostics["std_advantage"],
             "clip_fraction":         round(clip_fraction, 4),
-            "action_entropy":        round(action_entropy,4),
+            "action_entropy":        round(action_entropy, 4),
             "duration_seconds":      diagnostics["duration_seconds"],
             "checkpoint_saved":      False,
         }
@@ -573,7 +591,7 @@ def main(
             "policy_loss":           round(policy_loss,   6),
             "value_loss":            round(value_loss,    6),
             "clip_fraction":         round(clip_fraction, 4),
-            "action_entropy":        round(action_entropy,4),
+            "action_entropy":        round(action_entropy, 4),
             "explained_var":         round(explained_var, 4),
             "mean_advantage":        diagnostics["mean_advantage"],
             "std_advantage":         diagnostics["std_advantage"],
@@ -658,8 +676,8 @@ if __name__ == "__main__":
     use_pretrained = not args.no_pretrain
     use_masking    = not args.no_mask
 
-    if "Scratch"  in args.run_id: use_pretrained = False
-    if "NoMask"   in args.run_id: use_masking    = False
+    if "Scratch" in args.run_id: use_pretrained = False
+    if "NoMask"  in args.run_id: use_masking    = False
 
     main(
         run_id         = args.run_id,
