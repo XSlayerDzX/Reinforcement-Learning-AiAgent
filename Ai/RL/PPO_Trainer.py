@@ -17,10 +17,7 @@ EXPECTED_FEATURES = 205
 def clean_obs(obs):
     """
     Clean a raw env observation into a flat list of EXPECTED_FEATURES floats.
-
-    Instead of crashing when the cleaned frame has the wrong number of columns,
-    we pad with zeros (too few) or truncate (too many).  This prevents a single
-    malformed or fallback observation from aborting the entire rollout.
+    Pads with zeros (too few cols) or truncates (too many) to avoid crashes.
     """
     cleaned_frame = final_clean(obs)
     cleaned_frame = cleaned_frame.drop(columns=["match_id", "id"], errors="ignore")
@@ -59,15 +56,14 @@ def build_action_mask_from_obs(obs, num_actions=13):
     True  => action is legal
     False => action is masked out (logit -> -1e9)
 
-    Masking logic (applied in order):
+    Masking logic:
       1. Start with all actions BLOCKED (False).
       2. Always allow WAIT_ID.
-      3. For every known card action ID, allow it only if:
-           a. Its _avab feature is > 0 in the cleaned observation, AND
-           b. The card is currently in one of the 4 hand slots
-              (slot_1 / slot_2 / slot_3 / slot_4 columns).
-      4. Any action ID that is NOT in AVAIL_FEATURE_TO_ACTION_ID stays blocked
-         (e.g. unmapped IDs like 3, 8, 12 that have no corresponding card).
+      3. For every card in AVAIL_FEATURE_TO_ACTION_ID, allow its action ID
+         only if its _avab feature > 0 in the cleaned observation.
+         (_avab already encodes: card is in hand + enough elixir.)
+      4. Unmapped action IDs (no entry in AVAIL_FEATURE_TO_ACTION_ID) stay
+         blocked permanently.
 
     Falls back to all-True mask if obs cannot be cleaned (safe degradation).
     """
@@ -86,39 +82,18 @@ def build_action_mask_from_obs(obs, num_actions=13):
     if ALWAYS_ALLOW_WAIT and 0 <= WAIT_ID < num_actions:
         mask[WAIT_ID] = True
 
-    # Build set of cards currently in hand from slot columns
-    cards_in_hand = set()
-    for slot_col in ("slot_1", "slot_2", "slot_3", "slot_4"):
-        try:
-            slot_val = str(last_row[slot_col]).strip().lower()
-            if slot_val and slot_val not in ("nan", "none", ""):
-                cards_in_hand.add(slot_val)
-        except (KeyError, TypeError):
-            pass
-
-    # Step 3 — allow a card action only when available AND in hand
+    # Step 3 — allow card action if _avab > 0
+    # The _avab feature is already 1 only when the card is in hand and
+    # the player has enough elixir, so no separate slot check is needed.
     for feat, aid in AVAIL_FEATURE_TO_ACTION_ID.items():
         if aid is None or not (0 <= aid < num_actions):
             continue
-
-        # Check _avab feature (card is not on cooldown / elixir-locked)
-        avab_ok = False
         try:
-            avab_ok = float(last_row[feat]) > 0
+            if float(last_row[feat]) > 0:
+                mask[aid] = True
         except (KeyError, TypeError, ValueError):
             pass
 
-        if not avab_ok:
-            continue
-
-        # Check slot presence — card name is feat without "_avab"
-        card_name = feat.replace("_avab", "").strip().lower()
-        if card_name not in cards_in_hand:
-            continue
-
-        mask[aid] = True
-
-    # Step 4 — anything not set above (unmapped IDs) remains False
     return mask
 
 
@@ -165,8 +140,6 @@ def actor_critic_update(
     old_log_probs = rollout["log_probs"]
     advantages    = rollout["advantages"]
     returns       = rollout["returns"]
-
-    T = len(windows)
 
     states_t      = torch.tensor(windows,       dtype=torch.float32, device=device)
     actions_t     = torch.tensor(actions,       dtype=torch.long,    device=device)
