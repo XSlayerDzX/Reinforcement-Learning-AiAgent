@@ -15,6 +15,7 @@ import traceback
 import sys
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from time import sleep
 
@@ -67,6 +68,10 @@ _ACTION_ID_TO_CARD = {
     if v is not None
 }
 
+# How long to wait for the OCR server before giving up (seconds).
+# The Roboflow local server can hang indefinitely if it isn't running.
+_HP_REWARD_TIMEOUT = 30
+
 # ---------------------------------------------------------------------------
 # Template paths
 # ---------------------------------------------------------------------------
@@ -111,7 +116,7 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
         "run_id":               run_id,
         "win_rate_last_20":     round(win_rate, 4),
     }, path)
-    print(f"[{run_id}] Checkpoint saved -> {path}")
+    print(f"[{run_id}] Checkpoint saved -> {path}", flush=True)
 
 
 def _get_cleaned_row_ppo(state: pd.DataFrame):
@@ -149,7 +154,7 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
 
 
 def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
-    print("[END] Waiting for end-screen OK button...")
+    print("[END] Waiting for end-screen OK button...", flush=True)
     for tick in range(1, timeout_ticks + 1):
         result = Frame_Handler(window_title=window_title)
         if result is None:
@@ -158,24 +163,24 @@ def _dismiss_end_screen(templates, window_title, timeout_ticks=20):
         frame_path, monitor = result
         zone = {"left": monitor.get("left", 0), "top": monitor.get("top", 0)}
         detected = auto_play(frame_path, zone, templates)
-        print(f"[END] tick={tick}  detected={detected}")
+        print(f"[END] tick={tick}  detected={detected}", flush=True)
         if detected == "ok":
-            print("[END] OK clicked — waiting 4 s for menu to load...")
+            print("[END] OK clicked — waiting 4 s for menu to load...", flush=True)
             sleep(4.0)
             return
         sleep(1)
-    print("[END] Timed out waiting for end-screen OK — continuing anyway.")
+    print("[END] Timed out waiting for end-screen OK — continuing anyway.", flush=True)
 
 
 def _navigate_to_game(templates, window_title, stop_flag=None):
-    print("[NAV] Waiting for game to start...")
+    print("[NAV] Waiting for game to start...", flush=True)
     tick = 0
     while True:
         if stop_flag and stop_flag.is_set():
             return False
         result = Frame_Handler(window_title=window_title)
         if result is None:
-            print("[NAV] Frame_Handler returned None, retrying...")
+            print("[NAV] Frame_Handler returned None, retrying...", flush=True)
             sleep(1.5)
             tick += 1
             continue
@@ -184,24 +189,46 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
         detected = auto_play(frame_path, zone, templates)
         tick += 1
         if detected is None:
-            print(f"[NAV] tick={tick}  nothing matched — waiting...")
+            print(f"[NAV] tick={tick}  nothing matched — waiting...", flush=True)
             sleep(1.5)
         elif detected == "menu":
-            print(f"[NAV] tick={tick}  'menu' clicked — waiting for training-camp screen...")
+            print(f"[NAV] tick={tick}  'menu' clicked — waiting for training-camp screen...", flush=True)
             sleep(2.5)
         elif detected == "training_camp":
-            print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...")
+            print(f"[NAV] tick={tick}  'training_camp' clicked — waiting for OK button...", flush=True)
             sleep(3.0)
         elif detected == "ok_training":
-            print(f"[NAV] tick={tick}  'ok_training' clicked — game launching...")
+            print(f"[NAV] tick={tick}  'ok_training' clicked — game launching...", flush=True)
             sleep(4.0)
             return True
         elif detected == "ok":
-            print(f"[NAV] tick={tick}  'ok' (end screen) detected — clicking and waiting for menu...")
+            print(f"[NAV] tick={tick}  'ok' (end screen) detected — clicking...", flush=True)
             sleep(2.0)
         else:
-            print(f"[NAV] tick={tick}  unknown detection '{detected}' — waiting...")
+            print(f"[NAV] tick={tick}  unknown detection '{detected}' — waiting...", flush=True)
             sleep(1.5)
+
+
+def _hp_reward_with_timeout(frame_buffer, timeout=_HP_REWARD_TIMEOUT):
+    """Run compute_tower_hp_reward in a thread with a hard timeout.
+
+    The Roboflow OCR server (localhost:9001) can hang indefinitely when it
+    isn't running, blocking the entire training loop.  We cap the wait at
+    `timeout` seconds and return an empty list on timeout or any error.
+    """
+    if not frame_buffer:
+        return []
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(compute_tower_hp_reward, frame_buffer)
+            return fut.result(timeout=timeout)
+    except FuturesTimeoutError:
+        print(f"[HP_REWARD] OCR timed out after {timeout}s — skipping HP shaping.", flush=True)
+        return []
+    except Exception as e:
+        print(f"[HP_REWARD] compute_tower_hp_reward failed (non-fatal): {e}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +253,9 @@ def collect_rollout(
     illegal_action_count = 0
     action_dist          = defaultdict(int)
 
-    # FIX: track outcome from the terminal status string, never from shaped rewards
+    # Track outcome from the terminal status string, never from shaped rewards.
     # Shaped step rewards are tiny floats (e.g. 0.03) and will never equal
-    # reward_win (1.0) / reward_lose (-1.0), so inferring outcome from
-    # rewards[-1] always produced "draw".
+    # reward_win (1.0) / reward_lose (-1.0).
     terminal_outcome = "draw"
 
     done    = False
@@ -244,13 +270,13 @@ def collect_rollout(
     for attempt in range(5):
         if state_raw is not None and _ensure_dataframe(state_raw) is not None:
             break
-        print(f"[WARN] env.reset() invalid, retry {attempt+1}/5")
+        print(f"[WARN] env.reset() invalid, retry {attempt+1}/5", flush=True)
         sleep(2.0)
         state_raw, current_slots = env.reset()
 
     state = _ensure_dataframe(state_raw)
     if state is None or "slot_1" not in state.columns:
-        print("[ERROR] Could not get valid initial obs — skipping game.")
+        print("[ERROR] Could not get valid initial obs — skipping game.", flush=True)
         return None, {}
 
     with torch.no_grad():
@@ -258,11 +284,10 @@ def collect_rollout(
             if stop_flag and stop_flag.is_set():
                 break
 
-            # sequence buffering — guarded so a bad frame never aborts the rollout
             try:
                 current_window = sequenece_buffering(state, window_buffer, WINDOW_SIZE, INPUT_SIZE)
             except Exception as e:
-                print(f"[WARN] sequenece_buffering failed (using zero window): {e}")
+                print(f"[WARN] sequenece_buffering failed (using zero window): {e}", flush=True)
                 traceback.print_exc(file=sys.stdout)
                 current_window = [[0.0] * INPUT_SIZE for _ in range(WINDOW_SIZE)]
 
@@ -303,14 +328,14 @@ def collect_rollout(
                 except (KeyError, ValueError, TypeError):
                     live_elixir = 0.0
                 if live_elixir < card_cost:
-                    print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}")
+                    print(f"[SAFETY] Forced wait: {card_name} costs {card_cost}, elixir={live_elixir:.1f}", flush=True)
                     action_val = WAIT_ID
                     action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
             if _is_illegal_ppo(action_val, state):
                 illegal_action_count += 1
                 print(f"[ILLEGAL] action_id={action_val} "
-                      f"({_ACTION_ID_TO_CARD.get(action_val, '?')}) masked={use_masking}")
+                      f"({_ACTION_ID_TO_CARD.get(action_val, '?')}) masked={use_masking}", flush=True)
 
             action_dist[str(action_val)] += 1
 
@@ -341,15 +366,12 @@ def collect_rollout(
             for _ in range(2):
                 if next_state_raw is not None:
                     break
-                print("[WARN] Step returned None, retrying...")
+                print("[WARN] Step returned None, retrying...", flush=True)
                 sleep(1.5)
                 next_state_raw, reward, done, slots, frame = env.step(
                     action_val, pos_x, pos_y, state_raw, current_slots
                 )
 
-            # FIX: set terminal_outcome HERE from the status string.
-            # Do NOT infer outcome later from rewards[-1] — shaped rewards
-            # are small floats and will never hit reward_win / reward_lose.
             if isinstance(next_state_raw, str):
                 status           = next_state_raw.lower()
                 terminal_outcome = (
@@ -363,7 +385,7 @@ def collect_rollout(
                     float(env.reward_lose) if status == "loss" else 0.0
                 )
                 next_state_raw = None
-                print(f"[ROLLOUT] Terminal detected: status='{status}'  reward={reward}")
+                print(f"[ROLLOUT] Terminal detected: status='{status}'  reward={reward}", flush=True)
 
             next_state = _ensure_dataframe(next_state_raw)
             if next_state is None:
@@ -385,29 +407,23 @@ def collect_rollout(
             if done:
                 _dismiss_end_screen(templates, window_title)
 
-    # post-loop: confirm we exited and how many steps we collected
     print(f"[ROLLOUT] Loop exited — steps={len(rewards)}  outcome='{terminal_outcome}'  "
-          f"total_reward={sum(rewards):.4f}")
+          f"total_reward={sum(rewards):.4f}", flush=True)
 
-    # Tower HP reward shaping (post-game, non-fatal)
-    try:
-        hp_rewards = compute_tower_hp_reward(env.frame_buffer)
-        hp_total   = 0.0
-        for i, r in enumerate(hp_rewards):
-            if i < len(rewards) and r != 0.0:
-                rewards[i] += r
-                hp_total   += r
-        if hp_total != 0.0:
-            print(f"[HP_REWARD] Tower HP shaping total: {hp_total:.4f} "
-                  f"over {len(env.frame_buffer)} frames")
-    except Exception as e:
-        print(f"[HP_REWARD] compute_tower_hp_reward failed (non-fatal): {e}")
-        traceback.print_exc(file=sys.stdout)
+    # Tower HP reward shaping — runs in a thread with a hard timeout so a
+    # hung/absent Roboflow server never blocks the training loop.
+    print(f"[ROLLOUT] Running HP reward shaping (timeout={_HP_REWARD_TIMEOUT}s)...", flush=True)
+    hp_rewards = _hp_reward_with_timeout(env.frame_buffer)
+    hp_total   = 0.0
+    for i, r in enumerate(hp_rewards):
+        if i < len(rewards) and r != 0.0:
+            rewards[i] += r
+            hp_total   += r
+    if hp_total != 0.0:
+        print(f"[HP_REWARD] Shaping total: {hp_total:.4f} over {len(env.frame_buffer)} frames", flush=True)
+    print("[ROLLOUT] HP reward shaping done.", flush=True)
 
-    # FIX: compute_returns_and_advantages is now guarded — previously an
-    # unguarded crash here propagated all the way to main()'s except block,
-    # causing the loop to silently continue with no update logged.
-    print("[ROLLOUT] Computing returns and advantages...")
+    print("[ROLLOUT] Computing returns and advantages...", flush=True)
     try:
         rollout = {
             "windows":   windows,
@@ -421,11 +437,11 @@ def collect_rollout(
         }
         rollout = compute_returns_and_advantages(rollout, gamma=GAMMA)
     except Exception as e:
-        print(f"[ERROR] compute_returns_and_advantages failed: {e}")
+        print(f"[ERROR] compute_returns_and_advantages failed: {e}", flush=True)
         traceback.print_exc(file=sys.stdout)
         return None, {}
 
-    print("[ROLLOUT] Returns computed — building diagnostics...")
+    print("[ROLLOUT] Returns computed — building diagnostics...", flush=True)
 
     duration       = round(time.time() - t_start, 2)
     ep_len         = max(len(rewards), 1)
@@ -450,7 +466,7 @@ def collect_rollout(
     }
 
     print(f"[ROLLOUT] collect_rollout done — outcome='{terminal_outcome}'  "
-          f"steps={ep_len}  return={diagnostics['episodic_return']}")
+          f"steps={ep_len}  return={diagnostics['episodic_return']}", flush=True)
 
     return rollout, diagnostics
 
@@ -514,7 +530,7 @@ def main(
     best_winrate = logger.best_win_rate
 
     for game_id in range(start_game, n_games + 1):
-        print(f"\n[{run_id}] ── Game {game_id}/{n_games} ──")
+        print(f"\n[{run_id}] ── Game {game_id}/{n_games} ──", flush=True)
 
         try:
             rollout, diagnostics = collect_rollout(
@@ -526,15 +542,15 @@ def main(
                 window_title = window_title,
             )
         except Exception as e:
-            print(f"[ERROR] collect_rollout crashed on game {game_id}: {e}")
+            print(f"[ERROR] collect_rollout crashed on game {game_id}: {e}", flush=True)
             traceback.print_exc(file=sys.stdout)
             continue
 
         if rollout is None or not rollout["rewards"]:
-            print(f"[WARN] Empty/None rollout on game {game_id} — skipping update.")
+            print(f"[WARN] Empty/None rollout on game {game_id} — skipping update.", flush=True)
             continue
 
-        print(f"[{run_id}] Game {game_id}: rollout OK ({len(rollout['rewards'])} steps) — running PPO update...")
+        print(f"[{run_id}] Game {game_id}: rollout OK ({len(rollout['rewards'])} steps) — running PPO update...", flush=True)
 
         try:
             policy_loss, value_loss, clip_fraction, action_entropy = actor_critic_update(
@@ -546,13 +562,13 @@ def main(
                 epsilon              = EPSILON,
             )
         except Exception as e:
-            print(f"[ERROR] actor_critic_update crashed on game {game_id}: {e}")
+            print(f"[ERROR] actor_critic_update crashed on game {game_id}: {e}", flush=True)
             traceback.print_exc(file=sys.stdout)
             continue
 
         print(f"[{run_id}] Game {game_id} update done — "
               f"policy_loss={policy_loss:.4f}  value_loss={value_loss:.4f}  "
-              f"clip={clip_fraction:.2%}  entropy={action_entropy:.4f}")
+              f"clip={clip_fraction:.2%}  entropy={action_entropy:.4f}", flush=True)
 
         returns_arr   = np.array(rollout["returns"])
         values_arr    = np.array(rollout["values"])
@@ -627,7 +643,7 @@ def main(
                 model, optimizer, run_id, game_id, current_wr,
                 path=ppo_best_checkpoint_path(run_id),
             )
-            print(f"[{run_id}] New best win rate: {best_winrate:.0%} at game {game_id}")
+            print(f"[{run_id}] New best win rate: {best_winrate:.0%} at game {game_id}", flush=True)
             checkpoint_saved = True
 
         if checkpoint_saved:
