@@ -15,7 +15,6 @@ import traceback
 import sys
 import time
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from time import sleep
 
@@ -36,7 +35,6 @@ from Ai.Data_Cleaning import final_clean
 from Ai.Agent.start_end_game import auto_play, load_template
 from Ai.RL.ClashRoyalEnv import ClashRoyalEnv
 from Ai.RL.PPO_LSTM_Model import PPO_LSTM_Model
-from Ai.RL.Reward_System import compute_tower_hp_reward
 from Ai.Stream_to_frame import Frame_Handler
 
 from Ai.models.logger import RunLogger
@@ -68,9 +66,13 @@ _ACTION_ID_TO_CARD = {
     if v is not None
 }
 
-# How long to wait for the OCR server before giving up (seconds).
-# The Roboflow local server can hang indefinitely if it isn't running.
-_HP_REWARD_TIMEOUT = 30
+# ---------------------------------------------------------------------------
+# HP reward shaping flag
+# Set to True only when the Roboflow OCR server (localhost:9001) is running.
+# When False, compute_tower_hp_reward is never called and training proceeds
+# immediately after the game ends without any delay.
+# ---------------------------------------------------------------------------
+USE_HP_REWARD_SHAPING = False
 
 # ---------------------------------------------------------------------------
 # Template paths
@@ -209,28 +211,6 @@ def _navigate_to_game(templates, window_title, stop_flag=None):
             sleep(1.5)
 
 
-def _hp_reward_with_timeout(frame_buffer, timeout=_HP_REWARD_TIMEOUT):
-    """Run compute_tower_hp_reward in a thread with a hard timeout.
-
-    The Roboflow OCR server (localhost:9001) can hang indefinitely when it
-    isn't running, blocking the entire training loop.  We cap the wait at
-    `timeout` seconds and return an empty list on timeout or any error.
-    """
-    if not frame_buffer:
-        return []
-    try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(compute_tower_hp_reward, frame_buffer)
-            return fut.result(timeout=timeout)
-    except FuturesTimeoutError:
-        print(f"[HP_REWARD] OCR timed out after {timeout}s — skipping HP shaping.", flush=True)
-        return []
-    except Exception as e:
-        print(f"[HP_REWARD] compute_tower_hp_reward failed (non-fatal): {e}", flush=True)
-        traceback.print_exc(file=sys.stdout)
-        return []
-
-
 # ---------------------------------------------------------------------------
 # rollout collection
 # ---------------------------------------------------------------------------
@@ -254,8 +234,6 @@ def collect_rollout(
     action_dist          = defaultdict(int)
 
     # Track outcome from the terminal status string, never from shaped rewards.
-    # Shaped step rewards are tiny floats (e.g. 0.03) and will never equal
-    # reward_win (1.0) / reward_lose (-1.0).
     terminal_outcome = "draw"
 
     done    = False
@@ -410,18 +388,26 @@ def collect_rollout(
     print(f"[ROLLOUT] Loop exited — steps={len(rewards)}  outcome='{terminal_outcome}'  "
           f"total_reward={sum(rewards):.4f}", flush=True)
 
-    # Tower HP reward shaping — runs in a thread with a hard timeout so a
-    # hung/absent Roboflow server never blocks the training loop.
-    print(f"[ROLLOUT] Running HP reward shaping (timeout={_HP_REWARD_TIMEOUT}s)...", flush=True)
-    hp_rewards = _hp_reward_with_timeout(env.frame_buffer)
-    hp_total   = 0.0
-    for i, r in enumerate(hp_rewards):
-        if i < len(rewards) and r != 0.0:
-            rewards[i] += r
-            hp_total   += r
-    if hp_total != 0.0:
-        print(f"[HP_REWARD] Shaping total: {hp_total:.4f} over {len(env.frame_buffer)} frames", flush=True)
-    print("[ROLLOUT] HP reward shaping done.", flush=True)
+    # Tower HP reward shaping — only runs when USE_HP_REWARD_SHAPING=True
+    # and the Roboflow OCR server (localhost:9001) is available.
+    if USE_HP_REWARD_SHAPING:
+        print("[ROLLOUT] Running HP reward shaping...", flush=True)
+        try:
+            from Ai.RL.Reward_System import compute_tower_hp_reward
+            hp_rewards = compute_tower_hp_reward(env.frame_buffer)
+            hp_total   = 0.0
+            for i, r in enumerate(hp_rewards):
+                if i < len(rewards) and r != 0.0:
+                    rewards[i] += r
+                    hp_total   += r
+            if hp_total != 0.0:
+                print(f"[HP_REWARD] Shaping total: {hp_total:.4f} over {len(env.frame_buffer)} frames", flush=True)
+        except Exception as e:
+            print(f"[HP_REWARD] Failed (non-fatal): {e}", flush=True)
+            traceback.print_exc(file=sys.stdout)
+        print("[ROLLOUT] HP reward shaping done.", flush=True)
+    else:
+        print("[ROLLOUT] HP reward shaping skipped (USE_HP_REWARD_SHAPING=False).", flush=True)
 
     print("[ROLLOUT] Computing returns and advantages...", flush=True)
     try:
