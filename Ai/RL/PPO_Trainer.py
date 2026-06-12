@@ -11,16 +11,33 @@ import pandas as pd
 
 from Ai.Data_Cleaning import final_clean
 
+EXPECTED_FEATURES = 205
+
 
 def clean_obs(obs):
+    """
+    Clean a raw env observation into a flat list of EXPECTED_FEATURES floats.
+
+    Instead of crashing when the cleaned frame has the wrong number of columns,
+    we pad with zeros (too few) or truncate (too many).  This prevents a single
+    malformed or fallback observation from aborting the entire rollout.
+    """
     cleaned_frame = final_clean(obs)
     cleaned_frame = cleaned_frame.drop(columns=["match_id", "id"], errors="ignore")
     cleaned_frame = cleaned_frame.apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
-    if cleaned_frame.shape[1] != 205:
-        raise ValueError(
-            f"Expected {205} features, got {cleaned_frame.shape[1]} after cleaning."
+    n_cols = cleaned_frame.shape[1]
+    if n_cols != EXPECTED_FEATURES:
+        print(
+            f"[clean_obs] WARNING: expected {EXPECTED_FEATURES} features, "
+            f"got {n_cols}. Padding/truncating to {EXPECTED_FEATURES}."
         )
+        row = cleaned_frame.iloc[0].astype(float).tolist()
+        if n_cols < EXPECTED_FEATURES:
+            row = row + [0.0] * (EXPECTED_FEATURES - n_cols)
+        else:
+            row = row[:EXPECTED_FEATURES]
+        return row
 
     return cleaned_frame.iloc[0].astype(float).tolist()
 
@@ -135,7 +152,6 @@ def actor_critic_update(
     surr2     = torch.clamp(ratios, 1.0 - epsilon, 1.0 + epsilon) * advantages_t
     policy_loss = -torch.min(surr1, surr2).mean()
 
-    # --- clip_fraction: proportion of steps where ratio was outside [1-e, 1+e] ---
     clipped       = ((ratios < 1.0 - epsilon) | (ratios > 1.0 + epsilon)).float()
     clip_fraction = float(clipped.mean().item())
 

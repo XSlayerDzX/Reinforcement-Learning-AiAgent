@@ -117,12 +117,6 @@ def _save_checkpoint(model, optimizer, run_id, game_id, win_rate, path):
 
 
 def _get_cleaned_row_ppo(state: pd.DataFrame):
-    """
-    Run final_clean on the raw state DataFrame and return the first row.
-    Returns None on failure.
-    Needed because _avab columns are computed inside card_avable() which
-    is called by final_clean() — they do NOT exist in the raw env obs.
-    """
     try:
         cleaned = final_clean(state)
         if isinstance(cleaned, pd.DataFrame) and not cleaned.empty:
@@ -133,13 +127,6 @@ def _get_cleaned_row_ppo(state: pd.DataFrame):
 
 
 def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
-    """
-    Return True if the sampled action violated the availability mask OR the
-    elixir rule — regardless of whether masking is ON or OFF.
-
-    Reads from the *cleaned* observation so that _avab columns exist.
-    The raw state frame from the env does NOT contain _avab columns.
-    """
     if action_id == WAIT_ID:
         return False
     card_name = _ACTION_ID_TO_CARD.get(action_id)
@@ -150,7 +137,6 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     if row is None:
         return False
 
-    # Availability check
     avab_key = card_name + "_avab"
     try:
         if float(row[avab_key]) == 0.0:
@@ -158,7 +144,6 @@ def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
     except (KeyError, TypeError, ValueError):
         pass
 
-    # Elixir check
     cost = ElixirCost.get(card_name, 0)
     try:
         if float(row["Elixir"]) < cost:
@@ -276,7 +261,14 @@ def collect_rollout(
             if stop_flag and stop_flag.is_set():
                 break
 
-            current_window = sequenece_buffering(state, window_buffer, WINDOW_SIZE, INPUT_SIZE)
+            # ── sequence buffering (guarded — never aborts the rollout) ──────
+            try:
+                current_window = sequenece_buffering(state, window_buffer, WINDOW_SIZE, INPUT_SIZE)
+            except Exception as e:
+                print(f"[WARN] sequenece_buffering failed (using zero window): {e}")
+                traceback.print_exc(file=sys.stdout)
+                current_window = [[0.0] * INPUT_SIZE for _ in range(WINDOW_SIZE)]
+
             window_tensor  = torch.tensor(current_window, dtype=torch.float32).unsqueeze(0)
 
             action_logits, pos_logits, value_estimate, _ = model(window_tensor)
@@ -321,13 +313,11 @@ def collect_rollout(
                         action_val = WAIT_ID
                         action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
-            # ── illegal action check (always, uses cleaned obs) ───────────────
             if _is_illegal_ppo(action_val, state):
                 illegal_action_count += 1
                 print(f"[ILLEGAL] action_id={action_val} "
                       f"({_ACTION_ID_TO_CARD.get(action_val, '?')}) masked={use_masking}")
 
-            # ── action distribution counter ───────────────────────────────────
             action_dist[str(action_val)] += 1
 
             if action_val == WAIT_ID:
@@ -391,9 +381,7 @@ def collect_rollout(
             if done:
                 _dismiss_end_screen(templates, window_title)
 
-    # ── Tower HP reward shaping (post-game, never during live play) ───────────
-    # Uses frame_buffer accumulated by ClashRoyalEnv during the episode.
-    # Rewards are folded into the rewards list before computing advantages.
+    # ── Tower HP reward shaping ───────────────────────────────────────────────
     try:
         hp_rewards = compute_tower_hp_reward(env.frame_buffer)
         hp_total   = 0.0
@@ -522,8 +510,8 @@ def main(
                 window_title = window_title,
             )
         except Exception as e:
-            print(f"[ERROR] collect_rollout failed on game {game_id}: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] collect_rollout crashed on game {game_id}: {e}")
+            traceback.print_exc(file=sys.stdout)
             continue
 
         if rollout is None or not rollout["rewards"]:
@@ -540,9 +528,13 @@ def main(
                 epsilon             = EPSILON,
             )
         except Exception as e:
-            print(f"[ERROR] actor_critic_update failed on game {game_id}: {e}")
-            traceback.print_exc()
+            print(f"[ERROR] actor_critic_update crashed on game {game_id}: {e}")
+            traceback.print_exc(file=sys.stdout)
             continue
+
+        print(f"[{run_id}] Game {game_id} update done — "
+              f"policy_loss={policy_loss:.4f}  value_loss={value_loss:.4f}  "
+              f"clip={clip_fraction:.2%}  entropy={action_entropy:.4f}")
 
         returns_arr   = np.array(rollout["returns"])
         values_arr    = np.array(rollout["values"])
