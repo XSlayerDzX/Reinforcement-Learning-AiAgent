@@ -19,6 +19,8 @@ Tower semantics:
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
+import concurrent.futures
+import socket
 
 _CLIENT = None
 _CLIENT_ERROR: Optional[str] = None
@@ -27,9 +29,10 @@ WORKSPACE   = "clashroyalbot-z9idj"
 WORKFLOW_ID = "custom-workflow-3"
 SERVER_URL  = "http://localhost:9001"
 
-# Hard timeout (seconds) for every OCR HTTP call.
-# If the Roboflow server is down or slow, the call will be aborted after
-# this many seconds instead of hanging the training loop indefinitely.
+# Hard wall-clock limit for each OCR call (seconds).
+# The inference_sdk does NOT forward a timeout kwarg to requests, so the
+# only reliable way to cap it is to run the call in a thread and cancel
+# via Future.cancel() / executor shutdown after this many seconds.
 _OCR_TIMEOUT = 10
 
 
@@ -45,9 +48,6 @@ def _get_client():
         import os
         api_key = os.environ.get("ROBOFLOW_API_KEY", "obQog4mAaBRuPZZBIoti")
         _CLIENT = InferenceHTTPClient(api_url=SERVER_URL, api_key=api_key)
-        # Inject a default timeout so every subsequent run_workflow call
-        # respects it — the SDK passes kwargs straight through to requests.
-        _CLIENT.client_timeout = _OCR_TIMEOUT
     except Exception as e:
         _CLIENT_ERROR = str(e)
         print(f"[tower_hp_ocr] Could not create inference client: {e}")
@@ -65,12 +65,7 @@ class TowerHP:
 
 
 def _parse_hp(raw: str, is_king: bool = False) -> Optional[int]:
-    """Convert raw OCR string to int HP, or None on failure.
-
-    - Empty string or whitespace -> None (OCR failed, skip frame)
-    - '0' on a side tower        -> 0   (tower destroyed)
-    - '0' on king tower          -> None (no damage yet, ignore)
-    """
+    """Convert raw OCR string to int HP, or None on failure."""
     if raw is None:
         return None
     s = str(raw).strip()
@@ -85,37 +80,47 @@ def _parse_hp(raw: str, is_king: bool = False) -> Optional[int]:
     return v
 
 
+def _run_workflow_call(client, image_path: str):
+    """Bare workflow call — runs inside a thread so we can time it out."""
+    return client.run_workflow(
+        workspace_name=WORKSPACE,
+        workflow_id=WORKFLOW_ID,
+        images={"image": image_path},
+        use_cache=True,
+    )
+
+
 def run_ocr(image_path: str) -> Optional[TowerHP]:
     """Run the Roboflow OCR workflow on a single screenshot.
 
-    Returns a TowerHP dataclass on success, or None if the call fails
-    entirely (server down, timeout, network error, empty result, etc.).
-    Individual tower fields may be None if that tower could not be read.
-    """
-    import socket
-    import urllib.request
+    The call is executed in a worker thread and killed after _OCR_TIMEOUT
+    seconds, because the inference_sdk does not support a requests timeout
+    kwarg and will hang indefinitely if the server is slow or unresponsive.
 
-    # Fast pre-check: is the server port open at all?
-    # Avoids waiting for the full SDK timeout on every frame when the
-    # server is simply not running.
+    Returns a TowerHP dataclass on success, or None on any failure
+    (server down, timeout, empty result, parse error, etc.).
+    """
+    # Fast pre-check: is the TCP port open at all?
     try:
         with socket.create_connection(("localhost", 9001), timeout=2):
             pass
     except OSError:
-        # Port not reachable — skip silently
         return None
 
     client = _get_client()
     if client is None:
         return None
 
+    # Run the blocking SDK call in a thread with a hard timeout.
     try:
-        result = client.run_workflow(
-            workspace_name=WORKSPACE,
-            workflow_id=WORKFLOW_ID,
-            images={"image": image_path},
-            use_cache=True,
-        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run_workflow_call, client, image_path)
+            try:
+                result = future.result(timeout=_OCR_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                print(f"[tower_hp_ocr] OCR timed out after {_OCR_TIMEOUT}s for {image_path}")
+                future.cancel()
+                return None
     except Exception as e:
         print(f"[tower_hp_ocr] OCR call failed for {image_path}: {e}")
         return None
