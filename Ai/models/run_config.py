@@ -59,14 +59,27 @@ ENT_COEF      = 0.01
 GRAD_CLIP     = 0.5
 
 # ── Terminal rewards ───────────────────────────────────────────────────────────────────────────
-# These are applied in ClashRoyalEnv and PPO_Main at episode termination.
 REWARD_WIN  =  1.0
-REWARD_LOSS = -1.5   # raised from -1.0 — losing should sting more than winning rewards
+REWARD_LOSS = -1.5
 
 # ── Tower HP reward shaping ───────────────────────────────────────────────────────────────────
-TOWER_HP_SIDE_COEF = 0.3
-TOWER_HP_KING_COEF = 0.5
-HP_NORM            = 1000.0
+# HP_NORM lowered from 1000 -> 600 so every hit is felt ~1.67x more.
+#
+# Attack coefficients (enemy HP lost):
+#   Side tower full destruction (~1400 HP): 1400/600 * 0.35 = +0.82 total
+#   King tower full destruction (~3000 HP): 3000/600 * 0.50 = +2.50 total
+#
+# Defence coefficients (ally HP lost) — raised to penalise more than attack rewards:
+#   Ally side tower destroyed:              1400/600 * 0.55 = -1.28 total
+#   Ally king tower destroyed:              3000/600 * 0.80 = -4.00 total
+#
+# The asymmetry (defence coefs > attack coefs) makes the agent treat
+# protecting its own towers as more urgent than damaging enemy towers.
+TOWER_HP_SIDE_COEF      = 0.35   # enemy side tower damage reward   (raised from 0.30)
+TOWER_HP_KING_COEF      = 0.50   # enemy king tower damage reward   (unchanged)
+TOWER_HP_ALLY_SIDE_COEF = 0.55   # ally side tower damage penalty   (NEW — was same as attack)
+TOWER_HP_ALLY_KING_COEF = 0.80   # ally king tower damage penalty   (NEW — was same as attack)
+HP_NORM                 = 600.0  # divisor for HP deltas            (lowered from 1000)
 
 # ── BlueStacks window ─────────────────────────────────────────────────────────────────────────────
 DEFAULT_WINDOW_TITLE = "BlueStacks App Player 4"
