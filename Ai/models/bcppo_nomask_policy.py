@@ -1,56 +1,38 @@
-"""BC->PPO No-Mask training script  (seed 1 only).
+"""BCPPO_NoMask_s1  —  BC warm-start + action masking OFF.
 
-Ablation: tests whether action masking is doing meaningful work.
-BC warm-start is ON, but action masking is fully disabled —
-build_action_mask_from_obs and the elixir guard are both bypassed
-(every step gets an all-True mask).
+To run directly (e.g. from PyCharm): just edit SEED below, then
+run this file.  No command-line arguments needed.
 
-One seed only because this is a secondary ablation.
-
-Run:
-    python -m Ai.models.bcppo_nomask_policy
-
-What this produces:
-    Ai/logs/ppo/BCPPO_NoMask_s1/training_log.csv
-    Ai/logs/ppo/BCPPO_NoMask_s1/updates.json
-    Ai/logs/ppo/BCPPO_NoMask_s1/rollouts.json
-    Ai/logs/ppo/BCPPO_NoMask_s1/winrate.json
-    Ai/logs/ppo/BCPPO_NoMask_s1/run_summary.json
-    Ai/checkpoints/ppo/BCPPO_NoMask_s1/game_020.pth ... game_100.pth
-    Ai/checkpoints/ppo/BCPPO_NoMask_s1/best.pth
+To run from terminal:
+    python -m Ai.models.bcppo_nomask_policy --seed 1
 """
-
 import argparse
+
 from Ai.RL.PPO_Main import main
-from Ai.models.run_config import PPO_TRAINING_GAMES, DEFAULT_WINDOW_TITLE
+from Ai.models.run_config import DEFAULT_WINDOW_TITLE, PPO_TRAINING_GAMES
 
-_RUN_ID = "BCPPO_NoMask_s1"
-_SEED   = 1
+# ── Edit these to launch directly from PyCharm / file-run ────────────────────
+SEED   = 1
+RUN_ID = "BCPPO_NoMask_s1"
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def run(n_games: int = PPO_TRAINING_GAMES, window_title: str = DEFAULT_WINDOW_TITLE):
-    """Entry point callable from other scripts or notebooks."""
-    return main(
-        run_id         = _RUN_ID,
-        seed           = _SEED,
-        use_pretrained = True,   # BC warm-start ON
-        use_masking    = False,  # action masking OFF — ablation
+def _run(seed: int, run_id: str, n_games: int, window: str):
+    main(
+        run_id         = run_id,
+        seed           = seed,
+        use_pretrained = True,
+        use_masking    = False,
         n_games        = n_games,
-        window_title   = window_title,
+        window_title   = window,
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="BC->PPO No-Mask training (ablation: masking disabled)."
-    )
-    parser.add_argument(
-        "--n_games", type=int, default=PPO_TRAINING_GAMES,
-        help=f"Training games (default: {PPO_TRAINING_GAMES})"
-    )
-    parser.add_argument(
-        "--window", type=str, default=DEFAULT_WINDOW_TITLE,
-        help="BlueStacks window title"
-    )
+    parser = argparse.ArgumentParser(description="BCPPO training (BC warm-start, masking OFF)")
+    parser.add_argument("--seed",    type=int, default=SEED,                help="Random seed")
+    parser.add_argument("--run_id",  type=str, default=RUN_ID,              help="Run identifier")
+    parser.add_argument("--n_games", type=int, default=PPO_TRAINING_GAMES,  help="Training games")
+    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE,help="BlueStacks window")
     args = parser.parse_args()
-    run(n_games=args.n_games, window_title=args.window)
+    _run(args.seed, args.run_id, args.n_games, args.window)

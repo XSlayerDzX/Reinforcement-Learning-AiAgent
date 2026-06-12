@@ -1,61 +1,38 @@
-"""PPO-from-Scratch training script  (seeds 1 and 2).
+"""PPOScratch_s1 / PPOScratch_s2  —  random init + action masking ON.
 
-Ablation: isolates the value of BC pretraining.
-Identical to BC->PPO but with pretrained_model_path=None —
-all weights are randomly initialised. Action masking is still ON.
+To run directly (e.g. from PyCharm): just edit SEED and RUN_ID below, then
+run this file.  No command-line arguments needed.
 
-If BC->PPO significantly outperforms this, that is the central
-result of the paper.
-
-Run seed 1:
-    python -m Ai.models.pposcratch_policy --seed 1
-
-Run seed 2:
-    python -m Ai.models.pposcratch_policy --seed 2
-
-What this produces:
-    Ai/logs/ppo/PPOScratch_s{seed}/training_log.csv
-    Ai/logs/ppo/PPOScratch_s{seed}/updates.json
-    Ai/logs/ppo/PPOScratch_s{seed}/rollouts.json
-    Ai/logs/ppo/PPOScratch_s{seed}/winrate.json
-    Ai/logs/ppo/PPOScratch_s{seed}/run_summary.json
-    Ai/checkpoints/ppo/PPOScratch_s{seed}/game_020.pth ... game_100.pth
-    Ai/checkpoints/ppo/PPOScratch_s{seed}/best.pth
+To run from terminal:
+    python -m Ai.models.pposcratch_policy --seed 1 --run_id PPOScratch_s1
 """
-
 import argparse
+
 from Ai.RL.PPO_Main import main
-from Ai.models.run_config import PPO_TRAINING_GAMES, DEFAULT_WINDOW_TITLE
+from Ai.models.run_config import DEFAULT_WINDOW_TITLE, PPO_TRAINING_GAMES
+
+# ── Edit these to launch directly from PyCharm / file-run ────────────────────
+SEED   = 1
+RUN_ID = "PPOScratch_s1"   # options: "PPOScratch_s1"  |  "PPOScratch_s2"
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-def run(seed: int, n_games: int = PPO_TRAINING_GAMES, window_title: str = DEFAULT_WINDOW_TITLE):
-    """Entry point callable from other scripts or notebooks."""
-    run_id = f"PPOScratch_s{seed}"
-    return main(
+def _run(seed: int, run_id: str, n_games: int, window: str):
+    main(
         run_id         = run_id,
         seed           = seed,
-        use_pretrained = False,  # NO BC warm-start — random init
-        use_masking    = True,   # action masking ON
+        use_pretrained = False,
+        use_masking    = True,
         n_games        = n_games,
-        window_title   = window_title,
+        window_title   = window,
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="PPO-from-Scratch training (ablation: no BC pretraining)."
-    )
-    parser.add_argument(
-        "--seed", type=int, required=True, choices=[1, 2],
-        help="Seed index: 1 -> PPOScratch_s1, 2 -> PPOScratch_s2"
-    )
-    parser.add_argument(
-        "--n_games", type=int, default=PPO_TRAINING_GAMES,
-        help=f"Training games (default: {PPO_TRAINING_GAMES})"
-    )
-    parser.add_argument(
-        "--window", type=str, default=DEFAULT_WINDOW_TITLE,
-        help="BlueStacks window title"
-    )
+    parser = argparse.ArgumentParser(description="PPO from scratch (random init + masking)")
+    parser.add_argument("--seed",    type=int, default=SEED,                help="Random seed")
+    parser.add_argument("--run_id",  type=str, default=RUN_ID,              help="Run identifier")
+    parser.add_argument("--n_games", type=int, default=PPO_TRAINING_GAMES,  help="Training games")
+    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE,help="BlueStacks window")
     args = parser.parse_args()
-    run(seed=args.seed, n_games=args.n_games, window_title=args.window)
+    _run(args.seed, args.run_id, args.n_games, args.window)

@@ -13,7 +13,10 @@ Decision logic (in order):
   5. Place the chosen card at the default attack position (centre lane,
      just across the river on the enemy side), then enter cooldown.
 
-Run:
+To run directly (e.g. from PyCharm): just edit SEED below, then
+run this file.  No command-line arguments needed.
+
+To run from terminal:
     python -m Ai.models.heuristic_policy --seed 42
 """
 
@@ -31,12 +34,15 @@ from Ai.ClashRoyalData import ElixirCost
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
 from Ai.Data_Cleaning import final_clean
 
+# ── Edit these to launch directly from PyCharm / file-run ────────────────────
+SEED = 42
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Default placement: grid column 4 (centre), row 10 (just across river)
 _DEFAULT_GX = 4
 _DEFAULT_GY = 10
 
 # Minimum elixir required before the heuristic will attempt to play any card.
-# Prevents dumping the cheapest card the instant it becomes affordable.
 ELIXIR_THRESHOLD = 4.0
 
 # Number of steps to wait after playing a card before playing again.
@@ -60,36 +66,24 @@ class HeuristicPolicy:
 
     def __init__(self, window_title: str = DEFAULT_WINDOW_TITLE):
         self.window_title   = window_title
-        self._cooldown_left = 0   # steps remaining in post-play cooldown
+        self._cooldown_left = 0
 
     def reset(self):
-        """Called by eval_runner at the start of every game."""
         self._cooldown_left = 0
 
     def select_action(self, obs, slots) -> dict:
-        """
-        Args:
-            obs   : pd.DataFrame  (current environment observation)
-            slots : dict          (current card slots, ignored — we use obs directly)
-
-        Returns:
-            {"action_id": int, "pos_x": float, "pos_y": float}
-        """
         wait_result = {"action_id": 0, "pos_x": -1.0, "pos_y": -1.0}
 
         if obs is None or obs.empty:
             return wait_result
 
-        # ── Post-play cooldown ───────────────────────────────────────────
+        # Post-play cooldown
         if self._cooldown_left > 0:
             self._cooldown_left -= 1
             print(f"[HeuristicPolicy] Cooldown: {self._cooldown_left + 1} steps remaining — waiting")
             return wait_result
 
-        # ── CRITICAL: run final_clean so that _avab columns exist ────────────
-        # The raw obs from the env does NOT contain _avab columns — they are
-        # computed by card_avable() inside final_clean().  Without this call
-        # every avail lookup returns 0 and the policy always waits.
+        # Run final_clean so that _avab columns exist
         try:
             cleaned = final_clean(obs)
             if cleaned is None or cleaned.empty:
@@ -99,7 +93,7 @@ class HeuristicPolicy:
             print(f"[HeuristicPolicy] final_clean failed: {e} — defaulting to wait")
             return wait_result
 
-        # ── Elixir threshold check ───────────────────────────────────
+        # Elixir threshold check
         try:
             current_elixir = float(last_row.get("Elixir", 0))
         except (TypeError, ValueError):
@@ -109,15 +103,13 @@ class HeuristicPolicy:
             print(f"[HeuristicPolicy] Elixir={current_elixir:.1f} < threshold={ELIXIR_THRESHOLD} — waiting")
             return wait_result
 
-        # ── Find cheapest affordable available card ────────────────────────
+        # Find cheapest affordable available card
         best_action_id = None
         best_cost      = float("inf")
 
         for feat, action_id in AVAIL_FEATURE_TO_ACTION_ID.items():
             if action_id is None:
                 continue
-
-            # Check availability (column now exists after final_clean)
             avail = 0.0
             if feat in last_row.index:
                 try:
@@ -126,14 +118,10 @@ class HeuristicPolicy:
                     avail = 0.0
             if avail <= 0:
                 continue
-
-            # Check affordability
             card_name = feat.replace("_avab", "")
             cost = ElixirCost.get(card_name, float("inf"))
             if current_elixir < cost:
                 continue
-
-            # Pick lowest cost
             if cost < best_cost:
                 best_cost      = cost
                 best_action_id = action_id
@@ -141,7 +129,6 @@ class HeuristicPolicy:
         if best_action_id is None:
             return wait_result
 
-        # ── Convert grid position to screen coordinates ───────────────────
         try:
             bs_x, bs_y = grid_to_pixel(_DEFAULT_GX, _DEFAULT_GY)
             pos_x, pos_y = bluestacks_to_global_coords(
@@ -153,7 +140,6 @@ class HeuristicPolicy:
             print(f"[HeuristicPolicy] Coordinate conversion failed: {e} — using (-1, -1)")
             pos_x, pos_y = -1.0, -1.0
 
-        # Enter cooldown so the next POST_PLAY_COOLDOWN steps are waits
         self._cooldown_left = POST_PLAY_COOLDOWN
 
         print(f"[HeuristicPolicy] PLAY action_id={best_action_id} "
@@ -165,29 +151,26 @@ class HeuristicPolicy:
         return {"action_id": best_action_id, "pos_x": float(pos_x), "pos_y": float(pos_y)}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Heuristic baseline evaluation")
-    parser.add_argument("--seed",    type=int, default=42,         help="Seed (logged only, policy is deterministic)")
-    parser.add_argument("--n_games", type=int, default=EVAL_GAMES, help="Number of evaluation games")
-    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE, help="BlueStacks window title")
-    args = parser.parse_args()
-
-    policy = HeuristicPolicy(window_title=args.window)
-
+def _run(seed: int, n_games: int, window: str):
+    policy = HeuristicPolicy(window_title=window)
     print(f"\n{'='*60}")
-    print(f"Heuristic Policy Evaluation  |  seed={args.seed}  |  games={args.n_games}")
+    print(f"Heuristic Policy Evaluation  |  seed={seed}  |  games={n_games}")
     print(f"{'='*60}\n")
-
     run_evaluation(
         policy       = policy,
         policy_name  = "heuristic",
-        seed         = args.seed,
+        seed         = seed,
         log_dir      = baseline_log_dir("heuristic"),
         eval_dir     = baseline_eval_dir("heuristic"),
-        n_games      = args.n_games,
-        window_title = args.window,
+        n_games      = n_games,
+        window_title = window,
     )
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Heuristic baseline evaluation")
+    parser.add_argument("--seed",    type=int, default=SEED,                help="Seed (logged only, policy is deterministic)")
+    parser.add_argument("--n_games", type=int, default=EVAL_GAMES,          help="Number of evaluation games")
+    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE,help="BlueStacks window title")
+    args = parser.parse_args()
+    _run(args.seed, args.n_games, args.window)

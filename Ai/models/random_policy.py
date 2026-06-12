@@ -1,13 +1,11 @@
-"""Random baseline policy.
+"""Random baseline policy evaluation.
 
-At every step picks a random action from the full unmasked action space
-with a random valid grid position.  No elixir check, no card availability
-check — this is intentional: it anchors the absolute floor in the paper.
+To run directly (e.g. from PyCharm): just edit SEED below, then
+run this file.  No command-line arguments needed.
 
-Run:
+To run from terminal:
     python -m Ai.models.random_policy --seed 42
 """
-
 import argparse
 import random
 
@@ -18,86 +16,105 @@ from Ai.models.run_config import (
     baseline_eval_dir,
     baseline_log_dir,
 )
+from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID, WAIT_ID
+from Ai.ClashRoyalData import ElixirCost
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
-from Ai.models.run_config import NUM_ACTIONS
+from Ai.Data_Cleaning import final_clean
 
-# Grid dimensions (must match coordinate_utils.py)
-_GRID_W = 9
-_GRID_H = 18
+# ── Edit these to launch directly from PyCharm / file-run ────────────────────
+SEED = 42
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DEFAULT_GX = 4
+_DEFAULT_GY = 10
+
+_ACTION_IDS = [aid for aid in AVAIL_FEATURE_TO_ACTION_ID.values() if aid is not None]
 
 
 class RandomPolicy:
-    """
-    Selects a uniformly random action ID and a uniformly random grid cell
-    as the placement position.  No masking of any kind.
-    """
+    """Uniformly random legal action, or wait if nothing is affordable."""
 
     def __init__(self, seed: int = 42, window_title: str = DEFAULT_WINDOW_TITLE):
-        self.seed         = seed
+        self.rng          = random.Random(seed)
         self.window_title = window_title
-        self._rng         = random.Random(seed)
 
     def reset(self):
-        """Called by eval_runner at the start of every game."""
-        pass  # stateless — nothing to reset
+        pass
 
     def select_action(self, obs, slots) -> dict:
-        """
-        Returns a random action and a random screen position.
-
-        Args:
-            obs   : pd.DataFrame  (current environment observation)
-            slots : dict          (current card slots, ignored here)
-
-        Returns:
-            {"action_id": int, "pos_x": float, "pos_y": float}
-        """
-        action_id = self._rng.randint(0, NUM_ACTIONS - 1)
-
-        if action_id == 0:  # wait — no position needed
-            return {"action_id": 0, "pos_x": -1.0, "pos_y": -1.0}
-
-        # Random grid cell -> BlueStacks pixel -> global screen coords
-        gx = self._rng.randint(0, _GRID_W - 1)
-        gy = self._rng.randint(0, _GRID_H - 1)
+        wait_result = {"action_id": WAIT_ID, "pos_x": -1.0, "pos_y": -1.0}
+        if obs is None or obs.empty:
+            return wait_result
 
         try:
-            bs_x, bs_y = grid_to_pixel(gx, gy)
+            cleaned  = final_clean(obs)
+            if cleaned is None or cleaned.empty:
+                return wait_result
+            last_row = cleaned.iloc[0]
+        except Exception:
+            return wait_result
+
+        try:
+            current_elixir = float(last_row.get("Elixir", 0))
+        except (TypeError, ValueError):
+            current_elixir = 0.0
+
+        legal = []
+        for feat, action_id in AVAIL_FEATURE_TO_ACTION_ID.items():
+            if action_id is None:
+                continue
+            avail = 0.0
+            if feat in last_row.index:
+                try:
+                    avail = float(last_row[feat])
+                except (TypeError, ValueError):
+                    pass
+            if avail <= 0:
+                continue
+            card_name = feat.replace("_avab", "")
+            cost = ElixirCost.get(card_name, float("inf"))
+            if current_elixir >= cost:
+                legal.append(action_id)
+
+        if not legal:
+            return wait_result
+
+        action_id = self.rng.choice(legal)
+
+        try:
+            bs_x, bs_y = grid_to_pixel(_DEFAULT_GX, _DEFAULT_GY)
             pos_x, pos_y = bluestacks_to_global_coords(
                 bs_x, bs_y,
                 bluestacks_resolution=(540, 960),
                 window_title=self.window_title,
             )
         except Exception as e:
-            print(f"[RandomPolicy] Coordinate conversion failed: {e} — using (-1, -1)")
+            print(f"[RandomPolicy] Coordinate error: {e}")
             pos_x, pos_y = -1.0, -1.0
 
         return {"action_id": action_id, "pos_x": float(pos_x), "pos_y": float(pos_y)}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Random baseline evaluation")
-    parser.add_argument("--seed",    type=int, default=42,      help="Random seed")
-    parser.add_argument("--n_games", type=int, default=EVAL_GAMES, help="Number of evaluation games")
-    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE, help="BlueStacks window title")
-    args = parser.parse_args()
-
-    policy = RandomPolicy(seed=args.seed, window_title=args.window)
-
+def _run(seed: int, n_games: int, window: str):
+    policy = RandomPolicy(seed=seed, window_title=window)
     print(f"\n{'='*60}")
-    print(f"Random Policy Evaluation  |  seed={args.seed}  |  games={args.n_games}")
+    print(f"Random Policy Evaluation  |  seed={seed}  |  games={n_games}")
     print(f"{'='*60}\n")
-
     run_evaluation(
         policy       = policy,
         policy_name  = "random",
-        seed         = args.seed,
+        seed         = seed,
         log_dir      = baseline_log_dir("random"),
         eval_dir     = baseline_eval_dir("random"),
-        n_games      = args.n_games,
-        window_title = args.window,
+        n_games      = n_games,
+        window_title = window,
     )
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Random baseline evaluation")
+    parser.add_argument("--seed",    type=int, default=SEED,                help="Random seed")
+    parser.add_argument("--n_games", type=int, default=EVAL_GAMES,          help="Evaluation games")
+    parser.add_argument("--window",  type=str, default=DEFAULT_WINDOW_TITLE,help="BlueStacks window")
+    args = parser.parse_args()
+    _run(args.seed, args.n_games, args.window)
