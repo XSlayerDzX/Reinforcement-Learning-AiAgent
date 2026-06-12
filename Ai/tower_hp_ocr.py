@@ -27,8 +27,14 @@ WORKSPACE   = "clashroyalbot-z9idj"
 WORKFLOW_ID = "custom-workflow-3"
 SERVER_URL  = "http://localhost:9001"
 
-# Loaded lazily so importing this module never crashes if inference_sdk absent
+# Hard timeout (seconds) for every OCR HTTP call.
+# If the Roboflow server is down or slow, the call will be aborted after
+# this many seconds instead of hanging the training loop indefinitely.
+_OCR_TIMEOUT = 10
+
+
 def _get_client():
+    """Lazily create the InferenceHTTPClient, caching it after first call."""
     global _CLIENT, _CLIENT_ERROR
     if _CLIENT is not None:
         return _CLIENT
@@ -39,6 +45,9 @@ def _get_client():
         import os
         api_key = os.environ.get("ROBOFLOW_API_KEY", "obQog4mAaBRuPZZBIoti")
         _CLIENT = InferenceHTTPClient(api_url=SERVER_URL, api_key=api_key)
+        # Inject a default timeout so every subsequent run_workflow call
+        # respects it — the SDK passes kwargs straight through to requests.
+        _CLIENT.client_timeout = _OCR_TIMEOUT
     except Exception as e:
         _CLIENT_ERROR = str(e)
         print(f"[tower_hp_ocr] Could not create inference client: {e}")
@@ -72,7 +81,7 @@ def _parse_hp(raw: str, is_king: bool = False) -> Optional[int]:
     except ValueError:
         return None
     if v == 0 and is_king:
-        return None  # king at 0 means undamaged, not destroyed
+        return None
     return v
 
 
@@ -80,12 +89,26 @@ def run_ocr(image_path: str) -> Optional[TowerHP]:
     """Run the Roboflow OCR workflow on a single screenshot.
 
     Returns a TowerHP dataclass on success, or None if the call fails
-    entirely (server down, network error, empty result, etc.).
+    entirely (server down, timeout, network error, empty result, etc.).
     Individual tower fields may be None if that tower could not be read.
     """
+    import socket
+    import urllib.request
+
+    # Fast pre-check: is the server port open at all?
+    # Avoids waiting for the full SDK timeout on every frame when the
+    # server is simply not running.
+    try:
+        with socket.create_connection(("localhost", 9001), timeout=2):
+            pass
+    except OSError:
+        # Port not reachable — skip silently
+        return None
+
     client = _get_client()
     if client is None:
         return None
+
     try:
         result = client.run_workflow(
             workspace_name=WORKSPACE,
@@ -106,9 +129,6 @@ def run_ocr(image_path: str) -> Optional[TowerHP]:
     if not isinstance(result, dict):
         return None
 
-    # Check for per-field errors — if any qwen_error_* is non-empty the
-    # corresponding field is unreliable; we still parse but will get None
-    # from _parse_hp if the value is empty / 0 for king.
     return TowerHP(
         ally_left   = _parse_hp(result.get("ally_left",   ""), is_king=False),
         ally_right  = _parse_hp(result.get("ally_right",  ""), is_king=False),

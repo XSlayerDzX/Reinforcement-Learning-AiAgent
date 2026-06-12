@@ -42,11 +42,34 @@ def clean_obs(obs):
     return cleaned_frame.iloc[0].astype(float).tolist()
 
 
+# Reverse map: action_id -> card_name (no _avab suffix)
+_ACTION_ID_TO_CARD = {
+    v: k.replace("_avab", "")
+    for k, v in AVAIL_FEATURE_TO_ACTION_ID.items()
+    if v is not None
+}
+
+# All action IDs that correspond to a known card
+_KNOWN_CARD_ACTION_IDS = set(_ACTION_ID_TO_CARD.keys())
+
+
 def build_action_mask_from_obs(obs, num_actions=13):
     """
     Build a [num_actions] bool mask from a raw env observation (pd.DataFrame).
     True  => action is legal
     False => action is masked out (logit -> -1e9)
+
+    Masking logic (applied in order):
+      1. Start with all actions BLOCKED (False).
+      2. Always allow WAIT_ID.
+      3. For every known card action ID, allow it only if:
+           a. Its _avab feature is > 0 in the cleaned observation, AND
+           b. The card is currently in one of the 4 hand slots
+              (slot_1 / slot_2 / slot_3 / slot_4 columns).
+      4. Any action ID that is NOT in AVAIL_FEATURE_TO_ACTION_ID stays blocked
+         (e.g. unmapped IDs like 3, 8, 12 that have no corresponding card).
+
+    Falls back to all-True mask if obs cannot be cleaned (safe degradation).
     """
     try:
         cleaned_df = final_clean(obs)
@@ -56,22 +79,46 @@ def build_action_mask_from_obs(obs, num_actions=13):
     except Exception:
         return torch.ones(num_actions, dtype=torch.bool)
 
-    mask = torch.ones(num_actions, dtype=torch.bool)
+    # Step 1 — block everything by default
+    mask = torch.zeros(num_actions, dtype=torch.bool)
 
-    mapped_ids = {v for v in AVAIL_FEATURE_TO_ACTION_ID.values() if v is not None}
-    for aid in mapped_ids:
-        if 0 <= aid < num_actions:
-            mask[aid] = False
-
-    for feat, aid in AVAIL_FEATURE_TO_ACTION_ID.items():
-        if aid is None or not (0 <= aid < num_actions):
-            continue
-        if feat in last_row.index and last_row[feat] > 0:
-            mask[aid] = True
-
+    # Step 2 — wait is always legal
     if ALWAYS_ALLOW_WAIT and 0 <= WAIT_ID < num_actions:
         mask[WAIT_ID] = True
 
+    # Build set of cards currently in hand from slot columns
+    cards_in_hand = set()
+    for slot_col in ("slot_1", "slot_2", "slot_3", "slot_4"):
+        try:
+            slot_val = str(last_row[slot_col]).strip().lower()
+            if slot_val and slot_val not in ("nan", "none", ""):
+                cards_in_hand.add(slot_val)
+        except (KeyError, TypeError):
+            pass
+
+    # Step 3 — allow a card action only when available AND in hand
+    for feat, aid in AVAIL_FEATURE_TO_ACTION_ID.items():
+        if aid is None or not (0 <= aid < num_actions):
+            continue
+
+        # Check _avab feature (card is not on cooldown / elixir-locked)
+        avab_ok = False
+        try:
+            avab_ok = float(last_row[feat]) > 0
+        except (KeyError, TypeError, ValueError):
+            pass
+
+        if not avab_ok:
+            continue
+
+        # Check slot presence — card name is feat without "_avab"
+        card_name = feat.replace("_avab", "").strip().lower()
+        if card_name not in cards_in_hand:
+            continue
+
+        mask[aid] = True
+
+    # Step 4 — anything not set above (unmapped IDs) remains False
     return mask
 
 
