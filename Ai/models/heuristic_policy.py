@@ -28,6 +28,7 @@ from Ai.models.run_config import (
 from Ai.Behavior_Cloning.action_masking_config import AVAIL_FEATURE_TO_ACTION_ID
 from Ai.ClashRoyalData import ElixirCost
 from Ai.Agent.coordinate_utils import grid_to_pixel, bluestacks_to_global_coords
+from Ai.Data_Cleaning import final_clean
 
 # Default placement: grid column 4 (centre), row 10 (just across river)
 _DEFAULT_GX = 4
@@ -68,7 +69,18 @@ class HeuristicPolicy:
         if obs is None or obs.empty:
             return wait_result
 
-        last_row = obs.iloc[0]
+        # ── CRITICAL: run final_clean so that _avab columns exist ────────────
+        # The raw obs from the env does NOT contain _avab columns — they are
+        # computed by card_avable() inside final_clean().  Without this call
+        # every avail lookup returns 0 and the policy always waits.
+        try:
+            cleaned = final_clean(obs)
+            if cleaned is None or cleaned.empty:
+                return wait_result
+            last_row = cleaned.iloc[0]
+        except Exception as e:
+            print(f"[HeuristicPolicy] final_clean failed: {e} — defaulting to wait")
+            return wait_result
 
         # Read current elixir
         try:
@@ -84,7 +96,7 @@ class HeuristicPolicy:
             if action_id is None:
                 continue
 
-            # Check availability
+            # Check availability (column now exists after final_clean)
             avail = 0.0
             if feat in last_row.index:
                 try:
@@ -119,6 +131,11 @@ class HeuristicPolicy:
         except Exception as e:
             print(f"[HeuristicPolicy] Coordinate conversion failed: {e} — using (-1, -1)")
             pos_x, pos_y = -1.0, -1.0
+
+        print(f"[HeuristicPolicy] action_id={best_action_id} "
+              f"({_ACTION_ID_TO_CARD.get(best_action_id, '?')}) "
+              f"cost={best_cost} elixir={current_elixir:.1f} "
+              f"pos=({pos_x:.0f},{pos_y:.0f})")
 
         return {"action_id": best_action_id, "pos_x": float(pos_x), "pos_y": float(pos_y)}
 
