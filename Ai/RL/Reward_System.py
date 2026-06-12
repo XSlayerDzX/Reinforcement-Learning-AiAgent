@@ -8,10 +8,14 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 data_set = PROJECT_ROOT / "datasets" / "linked_dataset.csv"
 
-# Elixir overflow penalty constants
-_ELIXIR_MAX        = 10.0   # elixir is capped at 10
-_ELIXIR_OVERFLOW_THRESHOLD = 9.5   # start penalising above this
-_ELIXIR_OVERFLOW_PENALTY   = -0.05  # small fixed penalty per step at overflow
+# ── Elixir overflow penalty ───────────────────────────────────────────────────
+_ELIXIR_MAX                = 10.0
+_ELIXIR_OVERFLOW_THRESHOLD = 9.5    # penalise above this
+_ELIXIR_OVERFLOW_PENALTY   = -0.15  # raised from -0.05
+
+# ── Illegal action penalty ────────────────────────────────────────────────────
+# Applied in PPO_Main every step an illegal action is detected.
+ILLEGAL_ACTION_PENALTY = -0.5
 
 
 def compute_reward(match_data_set):
@@ -19,17 +23,17 @@ def compute_reward(match_data_set):
     df["r"] = 0.0
 
     enemy_troops = [col for col in df.columns if col.endswith("_enemy")]
-    ally_towers = ["ally_prince_tower_left", "ally_prince_tower_right", "ally_king_tower"]
+    ally_towers  = ["ally_prince_tower_left", "ally_prince_tower_right", "ally_king_tower"]
     enemy_towers = ["enemy_prince_tower_left", "enemy_prince_tower_right", "enemy_king_tower"]
 
     killed_troops = (df[enemy_troops].shift(1) == 1) & (df[enemy_troops] == 0)
     df.loc[killed_troops.any(axis=1), "r"] += 0.15
 
     unkilled_troops = (df[enemy_troops].shift(3) == 1) & (df[enemy_troops] == 1)
-    df.loc[unkilled_troops.any(axis=1), "r"] -= 0.01
+    df.loc[unkilled_troops.any(axis=1), "r"] -= 0.05   # raised from -0.01
 
     destroyed_ally_towers = (df[ally_towers].shift(1) == 1) & (df[ally_towers] == 0)
-    df.loc[destroyed_ally_towers.any(axis=1), "r"] -= 0.4
+    df.loc[destroyed_ally_towers.any(axis=1), "r"] -= 0.75   # raised from -0.4
 
     destroyed_enemy_towers = (df[enemy_towers].shift(1) == 1) & (df[enemy_towers] == 0)
     df.loc[destroyed_enemy_towers.any(axis=1), "r"] += 0.75
@@ -37,7 +41,7 @@ def compute_reward(match_data_set):
     rtg = np.zeros(len(df))
     rtg[-1] = df['r'].iloc[-1]
     for t in range(len(df)-2, -1, -1):
-        rtg[t] = df['r'].iloc[t] + rtg[t+1]  # gamma=1.0
+        rtg[t] = df['r'].iloc[t] + rtg[t+1]
     df['rtg'] = rtg
 
     output_path = match_data_set.replace('.csv', '_rewarded.csv')
@@ -53,8 +57,10 @@ def compute_step_reward(prev_obs, curr_obs):
     Includes:
       - Positive reward for reducing enemy column values
       - Negative reward for reducing ally column values
-      - Elixir overflow penalty: -0.05 per step when elixir >= 9.5
-        This discourages the agent from idling at max elixir.
+      - Elixir overflow penalty: -0.15 per step when elixir >= 9.5
+
+    Note: illegal-action penalty is applied separately in PPO_Main
+    using ILLEGAL_ACTION_PENALTY so it shows up clearly in diagnostics.
     """
     if prev_obs is None or curr_obs is None:
         return 0.0
@@ -103,15 +109,13 @@ def compute_step_reward(prev_obs, curr_obs):
         elif str(col).startswith("ally_"):
             reward -= float(d)
 
-    # ── Elixir overflow penalty ───────────────────────────────────────────────
-    # Penalise sitting at max elixir without spending — wastes elixir generation.
-    # Uses current observation so the penalty fires on the step where elixir is high.
+    # Elixir overflow penalty (raised from -0.05 to -0.15)
     try:
         elixir_val = float(curr_s["Elixir"])
         if elixir_val >= _ELIXIR_OVERFLOW_THRESHOLD:
             reward += _ELIXIR_OVERFLOW_PENALTY
     except (KeyError, TypeError, ValueError):
-        pass  # silently skip if Elixir column missing
+        pass
 
     return float(reward)
 
@@ -125,19 +129,6 @@ def compute_tower_hp_reward(
     """Compute per-step tower HP shaping rewards from a list of screenshot paths.
 
     Called ONCE after the game ends — never during live play.
-    Processes each consecutive frame pair and returns a list of float rewards
-    aligned to the frame_paths list (index 0 = no reward since no previous frame).
-
-    Rules:
-      - Enemy side tower HP decreased  -> + delta / hp_norm * side_coef
-      - Enemy king HP decreased        -> + delta / hp_norm * king_coef
-      - Ally side tower HP decreased   -> - delta / hp_norm * side_coef
-      - Ally king HP decreased         -> - delta / hp_norm * king_coef
-      - HP increased (healing) or 0    -> ignored
-      - OCR fails for either frame     -> that step gets 0.0 (silent skip)
-      - King tower at 0 HP             -> None from OCR (no double-counting
-                                         with the terminal win/loss reward)
-
     Returns a list of length len(frame_paths) with float rewards.
     """
     from Ai.models.run_config import (
@@ -157,7 +148,6 @@ def compute_tower_hp_reward(
     if n == 0:
         return rewards
 
-    # Run OCR on all frames upfront, silently skipping failures
     hp_readings = []
     for path in frame_paths:
         try:
@@ -167,44 +157,38 @@ def compute_tower_hp_reward(
             reading = None
         hp_readings.append(reading)
 
-    # Compute per-step delta rewards
     for i in range(1, n):
         prev_hp = hp_readings[i - 1]
         curr_hp = hp_readings[i]
 
-        # Either frame unreadable -> skip
         if prev_hp is None or curr_hp is None:
             continue
 
         step_reward = 0.0
 
-        # ── Enemy side towers ─────────────────────────────────────────────
         for prev_val, curr_val in [
             (prev_hp.enemy_left,  curr_hp.enemy_left),
             (prev_hp.enemy_right, curr_hp.enemy_right),
         ]:
             if prev_val is not None and curr_val is not None:
-                delta = prev_val - curr_val   # positive = HP lost by enemy
+                delta = prev_val - curr_val
                 if delta > 0:
                     step_reward += (delta / _norm) * _side
 
-        # ── Enemy king ───────────────────────────────────────────────────
         if prev_hp.enemy_king is not None and curr_hp.enemy_king is not None:
             delta = prev_hp.enemy_king - curr_hp.enemy_king
             if delta > 0:
                 step_reward += (delta / _norm) * _king
 
-        # ── Ally side towers ──────────────────────────────────────────────
         for prev_val, curr_val in [
             (prev_hp.ally_left,  curr_hp.ally_left),
             (prev_hp.ally_right, curr_hp.ally_right),
         ]:
             if prev_val is not None and curr_val is not None:
-                delta = prev_val - curr_val   # positive = HP lost by ally
+                delta = prev_val - curr_val
                 if delta > 0:
                     step_reward -= (delta / _norm) * _side
 
-        # ── Ally king ─────────────────────────────────────────────────────
         if prev_hp.ally_king is not None and curr_hp.ally_king is not None:
             delta = prev_hp.ally_king - curr_hp.ally_king
             if delta > 0:
