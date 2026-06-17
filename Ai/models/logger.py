@@ -43,21 +43,21 @@ def _save_json(path: Path, data):
 
 BASELINE_CSV_COLUMNS = [
     "policy", "game_id", "seed", "outcome",
-    "episodic_return",           # +1 win / -1 loss / 0 draw (terminal only)
+    "episodic_return",
     "episode_length",
     "total_actions", "wait_actions", "wait_rate",
-    "illegal_action_count",      # predicted actions that violated avb mask OR elixir rule
-    "illegal_action_rate",       # illegal_action_count / total_actions
-    "mean_elixir_at_action",     # avg elixir when a non-wait card was played
+    "illegal_action_count",
+    "illegal_action_rate",
+    "mean_elixir_at_action",
     "elixir_overflow_proxy",
-    "action_dist",               # JSON string: {action_id: count} for the full episode
+    "action_dist",
     "duration_seconds",
     "timestamp",
 ]
 
 PPO_CSV_COLUMNS = [
     "run_id", "game_id", "seed", "outcome",
-    "episodic_return",           # summed shaped step rewards (RL return)
+    "episodic_return",
     "episode_length",
     "total_actions", "wait_actions", "wait_rate",
     "illegal_action_count",
@@ -79,6 +79,12 @@ class RunLogger:
     """
     Single logger instance per run.  Works for both baselines and PPO runs.
     Pass mode="baseline" or mode="ppo" to select the correct CSV schema.
+
+    On init, if training_log.csv already exists (resumed run), the logger
+    automatically restores its in-memory counters (cumulative_wins,
+    outcome_window, best_winrate, returns list, etc.) from the existing rows
+    so that win_rate_last_20 and cumulative_wins remain correct after a
+    crash-and-resume.
     """
 
     def __init__(self, log_dir: Path, run_id: str, mode: str = "ppo"):
@@ -95,6 +101,7 @@ class RunLogger:
         self.rollouts_path = self.log_dir / "rollouts.json"
         self.summary_path  = self.log_dir / "run_summary.json"
 
+        # In-memory state — restored from CSV if one already exists
         self._game_count        = 0
         self._cumulative_wins   = 0
         self._outcome_window    = deque(maxlen=20)
@@ -105,27 +112,87 @@ class RunLogger:
         self._best_winrate      = 0.0
         self._best_winrate_game = 0
 
-        if not self.csv_path.exists():
+        if self.csv_path.exists():
+            self._restore_from_csv()
+        else:
             with open(self.csv_path, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=self.csv_columns)
                 writer.writeheader()
+
+    # ── restore helper ────────────────────────────────────────────────────────
+
+    def _restore_from_csv(self):
+        """Replay all existing CSV rows into in-memory state.
+
+        Makes win_rate_last_20, cumulative_wins, best_winrate, etc.
+        correct when training resumes after a crash or manual stop.
+        """
+        try:
+            with open(self.csv_path, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+        except Exception as e:
+            print(f"[{self.run_id}] WARNING: could not read existing CSV for restore: {e}")
+            with open(self.csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self.csv_columns)
+                writer.writeheader()
+            return
+
+        if not rows:
+            return
+
+        print(f"[{self.run_id}] Restoring logger state from {len(rows)} existing CSV rows...", flush=True)
+
+        for row in rows:
+            outcome = row.get("outcome", "unknown")
+            self._game_count += 1
+            self._outcome_window.append(outcome)
+            if outcome == "win":
+                self._cumulative_wins += 1
+
+            try:
+                self._all_returns.append(float(row.get("episodic_return", 0.0)))
+            except (ValueError, TypeError):
+                self._all_returns.append(0.0)
+
+            try:
+                self._all_lengths.append(int(row.get("episode_length", 0)))
+            except (ValueError, TypeError):
+                self._all_lengths.append(0)
+
+            try:
+                self._all_durations.append(float(row.get("duration_seconds", 0.0)))
+            except (ValueError, TypeError):
+                self._all_durations.append(0.0)
+
+            try:
+                self._all_illegal_rates.append(float(row.get("illegal_action_rate", 0.0)))
+            except (ValueError, TypeError):
+                self._all_illegal_rates.append(0.0)
+
+            try:
+                wr = float(row.get("win_rate_last_20", 0.0))
+                if wr > self._best_winrate:
+                    self._best_winrate      = wr
+                    self._best_winrate_game = int(row.get("game_id", self._game_count))
+            except (ValueError, TypeError):
+                pass
+
+        wins_in_window = sum(1 for o in self._outcome_window if o == "win")
+        restored_wr    = round(wins_in_window / len(self._outcome_window), 4) if self._outcome_window else 0.0
+
+        print(
+            f"[{self.run_id}] Logger restored: "
+            f"games={self._game_count}  cumulative_wins={self._cumulative_wins}  "
+            f"win_rate_last_20={restored_wr:.0%}  best_wr={self._best_winrate:.0%}",
+            flush=True,
+        )
 
     # ── per-game logging ──────────────────────────────────────────────────────
 
     def log_game(self, record: dict):
         """
         Append one row to training_log.csv and update winrate.json.
-
-        Required keys (baseline):
-            game_id, seed, outcome, episodic_return, episode_length,
-            total_actions, wait_actions, mean_elixir_at_action,
-            elixir_overflow_proxy, duration_seconds,
-            illegal_action_count, illegal_action_rate, action_dist
-
-        PPO additionally needs:
-            policy_loss, value_loss, explained_variance,
-            mean_advantage, std_advantage, clip_fraction,
-            action_entropy, checkpoint_saved
         """
         self._game_count += 1
         outcome = record.get("outcome", "unknown")
@@ -164,11 +231,9 @@ class RunLogger:
             ep_len = max(row.get("episode_length", 1), 1)
             row["wait_rate"] = round(row.get("wait_actions", 0) / ep_len, 4)
 
-        # action_dist must be stored as a JSON string in the CSV
         if "action_dist" in row and isinstance(row["action_dist"], dict):
             row["action_dist"] = json.dumps(row["action_dist"])
 
-        # Defaults so CSV never has blank cells
         row.setdefault("mean_elixir_at_action", 0.0)
         row.setdefault("duration_seconds", 0.0)
         row.setdefault("illegal_action_count", 0)
@@ -216,7 +281,7 @@ class RunLogger:
         rollout_summary.setdefault("timestamp", datetime.now().isoformat())
         rollout_summary.setdefault("run_id", self.run_id)
         history.append(rollout_summary)
-        _save_json(self.rollouts_path, history)
+        _save_json(self.rollouts_path, rollout_summary)
 
     # ── end-of-run summary ────────────────────────────────────────────────────
 

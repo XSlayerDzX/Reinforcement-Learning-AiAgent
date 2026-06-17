@@ -71,8 +71,6 @@ _ACTION_ID_TO_CARD = {
 
 # ---------------------------------------------------------------------------
 # HP reward shaping flag
-# run_ocr does a 2s port-check before each call — safe to leave True even
-# when the Roboflow server is occasionally down.
 # ---------------------------------------------------------------------------
 USE_HP_REWARD_SHAPING = True
 
@@ -134,20 +132,12 @@ def _get_cleaned_row_ppo(state: pd.DataFrame):
 
 
 def _is_illegal_ppo(action_id: int, state: pd.DataFrame) -> bool:
-    """Return True if action_id is illegal given the current state.
-
-    Illegal if:
-      - Unmapped action ID (no card associated), OR
-      - Card _avab feature == 0 (not in hand / on cooldown), OR
-      - Not enough elixir for the card cost.
-    WAIT is always legal.
-    """
     if action_id == WAIT_ID:
         return False
 
     card_name = _ACTION_ID_TO_CARD.get(action_id)
     if card_name is None:
-        return True  # unmapped ID
+        return True
 
     row = _get_cleaned_row_ppo(state)
     if row is None:
@@ -249,7 +239,6 @@ def collect_rollout(
     action_dist          = defaultdict(int)
 
     terminal_outcome = "draw"
-
     done    = False
     t_start = time.time()
 
@@ -324,9 +313,6 @@ def collect_rollout(
                     action_val = WAIT_ID
                     action     = torch.tensor(WAIT_ID, dtype=torch.long)
 
-            # ----------------------------------------------------------------
-            # Illegal-action detection + penalty
-            # ----------------------------------------------------------------
             is_illegal = _is_illegal_ppo(action_val, state)
             if is_illegal:
                 illegal_action_count += 1
@@ -387,7 +373,6 @@ def collect_rollout(
                 next_state_raw = None
                 print(f"[ROLLOUT] Terminal detected: status='{status}'  reward={reward}", flush=True)
 
-            # Apply illegal-action penalty on top of env reward
             if is_illegal:
                 reward += ILLEGAL_ACTION_PENALTY
 
@@ -521,16 +506,22 @@ def main(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     start_game = 1
 
+    # ── Resume: load latest per-game checkpoint ──────────────────────────────
+    # Checkpoints are now saved after EVERY game, so the latest game_NNN.pth
+    # always reflects the most recently completed game.
     existing = sorted(ckpt_dir.glob("game_*.pth"))
     if existing:
         latest_ckpt = existing[-1]
-        print(f"[{run_id}] Resuming from {latest_ckpt}")
-        ckpt = torch.load(latest_ckpt)
+        print(f"[{run_id}] Resuming from {latest_ckpt}", flush=True)
+        ckpt = torch.load(latest_ckpt, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_game = ckpt["game_id"] + 1
-        print(f"[{run_id}] Resuming from game {start_game}")
+        print(f"[{run_id}] Weights restored — resuming from game {start_game}", flush=True)
+    else:
+        print(f"[{run_id}] No existing checkpoint — starting fresh.", flush=True)
 
+    # ── Logger (auto-restores in-memory counters from existing CSV) ───────────
     logger = RunLogger(
         log_dir = ppo_log_dir(run_id),
         run_id  = run_id,
@@ -638,14 +629,15 @@ def main(
             "action_dist":          diagnostics["action_dist"],
         })
 
-        checkpoint_saved = False
-
-        if game_id % CHECKPOINT_INTERVAL == 0:
-            _save_checkpoint(
-                model, optimizer, run_id, game_id, current_wr,
-                path=ppo_checkpoint_path(run_id, game_id),
-            )
-            checkpoint_saved = True
+        # ── Save checkpoint after EVERY game ──────────────────────────────────
+        # Guarantees at most one game of weight updates is lost on any crash
+        # or manual stop.  game_NNN.pth is written for every game so the
+        # resume logic always finds the exact last completed game.
+        _save_checkpoint(
+            model, optimizer, run_id, game_id, current_wr,
+            path=ppo_checkpoint_path(run_id, game_id),
+        )
+        checkpoint_saved = True
 
         if current_wr > best_winrate:
             best_winrate = current_wr
@@ -654,10 +646,8 @@ def main(
                 path=ppo_best_checkpoint_path(run_id),
             )
             print(f"[{run_id}] New best win rate: {best_winrate:.0%} at game {game_id}", flush=True)
-            checkpoint_saved = True
 
-        if checkpoint_saved:
-            logger.log_ppo_update({"update_id": game_id, "checkpoint_saved": True})
+        logger.log_ppo_update({"update_id": game_id, "checkpoint_saved": checkpoint_saved})
 
     _save_checkpoint(
         model, optimizer, run_id, n_games, logger.current_win_rate,
