@@ -28,10 +28,23 @@ from typing import Optional
 def _ensure_dir(path: Path):
     os.makedirs(path, exist_ok=True)
 
-def _load_json(path: Path):
+def _load_json(path: Path) -> list:
+    """Load a JSON file and always return a list.
+
+    If the file contains a plain dict (corrupted from a previous bug),
+    it is wrapped in a list so callers can safely call .append().
+    """
     if path.exists():
-        with open(path, "r") as f:
-            return json.load(f)
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            # Corrupted: single dict written instead of list — recover gracefully
+            print(f"[logger] WARNING: {path.name} contained a dict instead of a list — wrapping it.")
+            return [data]
+        except Exception as e:
+            print(f"[logger] WARNING: could not read {path.name}: {e} — starting fresh list.")
     return []
 
 def _save_json(path: Path, data):
@@ -281,7 +294,7 @@ class RunLogger:
         rollout_summary.setdefault("timestamp", datetime.now().isoformat())
         rollout_summary.setdefault("run_id", self.run_id)
         history.append(rollout_summary)
-        _save_json(self.rollouts_path, history)  # fixed: was rollout_summary
+        _save_json(self.rollouts_path, history)
 
     # ── end-of-run summary ────────────────────────────────────────────────────
 
@@ -299,8 +312,8 @@ class RunLogger:
             "mode":                  self.mode,
             "total_games":           total_games,
             "total_wins":            total_wins,
-            "total_losses":          sum(1 for e in winrate_hist if e["outcome"] == "loss"),
-            "total_draws":           sum(1 for e in winrate_hist if e["outcome"] == "draw"),
+            "total_losses":          sum(1 for e in winrate_hist if e.get("outcome") == "loss"),
+            "total_draws":           sum(1 for e in winrate_hist if e.get("outcome") == "draw"),
             "final_win_rate":        final_winrate,
             "best_win_rate":         round(self._best_winrate, 4),
             "best_win_rate_game":    self._best_winrate_game,
