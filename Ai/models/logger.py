@@ -281,7 +281,7 @@ class RunLogger:
         rollout_summary.setdefault("timestamp", datetime.now().isoformat())
         rollout_summary.setdefault("run_id", self.run_id)
         history.append(rollout_summary)
-        _save_json(self.rollouts_path, rollout_summary)
+        _save_json(self.rollouts_path, history)  # fixed: was rollout_summary
 
     # ── end-of-run summary ────────────────────────────────────────────────────
 
